@@ -178,7 +178,7 @@
       <div class="bar"><i id="hpghost"></i><i id="hpfill"></i><span id="hptxt"></span></div>
     </div>
     <div id="topR">
-      第 <b id="fN">1</b> 层 · 第 <b id="rN">1</b> 间 &nbsp; 击杀 <b id="kN">0</b><br>
+      第 <b id="fN">1</b> 层 · 第 <b id="rN">1</b> 间 <b id="kindN"></b> &nbsp; 击杀 <b id="kN">0</b><br>
       <span id="affixTip" class="none"></span>
     </div>
     <div id="bossWrap">
@@ -247,6 +247,8 @@
         <div class="pCol">
           <h4>操 作</h4>
           <div id="pKeys"></div>
+          <h4>要 点</h4>
+          <div id="pTips"></div>
         </div>
         <div class="pCol">
           <h4>当 前 属 性</h4>
@@ -418,6 +420,7 @@ const SND=(()=>{
     block(){ noi(.09,{vol:.24,f0:4200,f1:2600,q:5}); tone(880,700,.09,{type:'square',vol:.09}); },
     step(){ noi(.05,{vol:.075,f0:340,f1:150,q:1.6}); },
     heal(){ [523,784,1047].forEach((f,i)=>tone(f,f,.20,{type:'sine',vol:.14,delay:i*.05})); },
+    poise(){ noi(.20,{vol:.26,f0:1100,f1:2900,q:2}); tone(300,760,.18,{type:'square',vol:.16}); },
     jump(){ noi(.09,{vol:.10,f0:420,f1:1300,q:1.2}); tone(300,620,.11,{type:'sine',vol:.09}); },
     land(){ noi(.11,{vol:.16,f0:500,f1:120,q:1.1}); tone(130,60,.13,{type:'sine',vol:.13}); },
     ewind(){ tone(150,300,.20,{type:'sawtooth',vol:.075}); },
@@ -461,7 +464,14 @@ const tapped=k=>{ if(hit[k]){ hit[k]=false; return true; } return false; };
 /* =========================================================================
    触摸操作（手机 / 平板）—— 左摇杆 + 右下大攻击键 + 环绕技能键
    ========================================================================= */
-let touchMode = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
+/* 只有「粗指针且没有鼠标」才自动开触摸 UI —— 带触摸屏的 Windows 笔记本不该被判为手机。
+   真机上第一次 touchstart 也会自动打开。 */
+let touchMode = (()=>{
+  try{ return matchMedia('(pointer:coarse)').matches && !matchMedia('(pointer:fine)').matches; }
+  catch(_){ return false; }
+})();
+const sHeld={l:false,r:false,u:false,d:false};      // 摇杆按下状态，与键盘分开存
+const DH=k=>held[k]||sHeld[k];                       // 方向键：键盘或摇杆任一即可
 const STICK={on:false, id:null, bx:152, by:410, dx:0, dy:0, R:66};
 const PADS=[
   {k:'atk', nm:'攻击', x:855, y:455, r:54, big:true},
@@ -494,15 +504,15 @@ function setStick(lx,ly){
 }
 function applyStick(){
   if(!STICK.on){
-    if(touchMode){ held.l=held.r=held.u=held.d=false; }
+    sHeld.l=sHeld.r=sHeld.u=sHeld.d=false;   // 只清自己的，绝不碰键盘的 held
     stickFar=false; return;
   }
   const nx=STICK.dx/STICK.R, ny=STICK.dy/STICK.R;
   const m=Math.hypot(nx,ny);
-  held.r = m>.26 && nx> .36;
-  held.l = m>.26 && nx<-.36;
-  held.d = m>.26 && ny> .40;
-  held.u = m>.26 && ny<-.40;
+  sHeld.r = m>.26 && nx> .36;
+  sHeld.l = m>.26 && nx<-.36;
+  sHeld.d = m>.26 && ny> .40;
+  sHeld.u = m>.26 && ny<-.40;
   // 摇杆推到底 = 奔跑（手机上不用双击）
   const far = m>.80 && Math.abs(nx)>.55;
   if(far && !stickFar) runReq = nx>0?'r':'l';
@@ -510,7 +520,10 @@ function applyStick(){
   stickFar=far;
 }
 function tStart(e){
-  if(!touchMode || gameState!=='play') return;
+  if(!touchMode){                     // 真机第一次触摸 → 自动启用触摸操作
+    touchMode=true; document.body.classList.add('touch');
+  }
+  if(gameState!=='play') return;
   for(let i=0;i<e.changedTouches.length;i++){
     const t=e.changedTouches[i], [lx,ly]=toLogical(t);
     const p=padAt(lx,ly);
@@ -543,7 +556,7 @@ function tEnd(e){
     touchOwner.delete(t.identifier);
     if(own==='stick'){
       STICK.on=false; STICK.id=null; STICK.dx=STICK.dy=0;
-      held.l=held.r=held.u=held.d=false;
+      sHeld.l=sHeld.r=sHeld.u=sHeld.d=false;
       if(P) P.run=null;
     } else held[own]=false;
   }
@@ -619,9 +632,9 @@ const SKILLS_SWORD=[
 
 /* ---------- 神枪手：远程，单发低但攻速快、安全，代价是血薄 ---------- */
 const COMBO_GUN=[
- {dur:.20,at:.05,mul:0.74,kb: 22,up:  0,hs:.030,st:.14,nm:'速射',
+ {dur:.20,at:.05,mul:0.74,kb: 22,up:  0,hs:.030,st:.10,nm:'速射',
   shot:{spd:900,pierce:0,life:1.0}},
- {dur:.20,at:.05,mul:0.80,kb: 24,up:  0,hs:.030,st:.15,nm:'连射',
+ {dur:.20,at:.05,mul:0.80,kb: 24,up:  0,hs:.030,st:.11,nm:'连射',
   shot:{spd:900,pierce:0,life:1.0}},
  {dur:.34,at:.08,mul:1.48,kb:140,up: 90,hs:.070,st:.34,nm:'重击弹',qi:true,
   shot:{spd:1020,pierce:1,life:1.1,big:true}},
@@ -658,13 +671,19 @@ function applyClass(id){
 }
 
 const ET={
- goblin :{hp: 36,atk: 8,spd: 78,hw:15,hd:12,h:52,col:'#63b85a',dk:'#38712f',nm:'哥布林'},
- charger:{hp: 52,atk:13,spd:104,hw:17,hd:13,h:55,col:'#e05a4f',dk:'#8a2f27',nm:'冲锋兵'},
- archer :{hp: 30,atk:10,spd: 70,hw:14,hd:11,h:50,col:'#a879d8',dk:'#653f8a',nm:'弓手'},
- shield :{hp:120,atk:15,spd: 50,hw:20,hd:15,h:58,col:'#96a0b0',dk:'#545d6b',nm:'盾卫'},
- mini   :{hp: 16,atk: 6,spd: 96,hw:11,hd: 9,h:38,col:'#8fd47f',dk:'#4a8340',nm:'小鬼'},
- boss   :{hp:1100,atk:24,spd:64,hw:38,hd:28,h:112,col:'#8a5230',dk:'#472713',nm:'巨魔王'},
+ goblin :{hp: 36,atk: 8,spd: 78,hw:15,hd:12,h:52,col:'#63b85a',dk:'#38712f',nm:'哥布林', poise:1.25},
+ charger:{hp: 52,atk:13,spd:104,hw:17,hd:13,h:55,col:'#e05a4f',dk:'#8a2f27',nm:'冲锋兵', poise:1.50},
+ archer :{hp: 30,atk:10,spd: 70,hw:14,hd:11,h:50,col:'#a879d8',dk:'#653f8a',nm:'弓手',   poise:1.00},
+ shield :{hp:120,atk:15,spd: 50,hw:20,hd:15,h:58,col:'#96a0b0',dk:'#545d6b',nm:'盾卫',   poise:2.30},
+ mage   :{hp: 38,atk:14,spd: 56,hw:15,hd:12,h:54,col:'#4fc9d8',dk:'#256f7a',nm:'术士',   poise:1.05},
+ bomber :{hp: 28,atk:26,spd:124,hw:16,hd:13,h:46,col:'#e8963c',dk:'#8a5216',nm:'爆弹鬼', poise:1.35},
+ bat    :{hp: 22,atk: 9,spd:142,hw:13,hd:11,h:32,col:'#c06cd8',dk:'#5f2f80',nm:'魔蝠',   poise:0.85},
+ berserk:{hp:104,atk:16,spd: 86,hw:19,hd:15,h:58,col:'#d8504f',dk:'#7a2321',nm:'狂战士', poise:2.10},
+ mini   :{hp: 16,atk: 6,spd: 96,hw:11,hd: 9,h:38,col:'#8fd47f',dk:'#4a8340',nm:'小鬼',   poise:0.70},
+ boss   :{hp:1100,atk:24,spd:64,hw:38,hd:28,h:112,col:'#8a5230',dk:'#472713',nm:'巨魔王',poise:99},
 };
+/* 远程/危险兵种：脚下画标记环，让玩家一眼分清威胁 */
+const RANGED={archer:1, mage:1};
 
 const AFFIX=[
  {id:'shield',nm:'护盾',ds:'首次受击伤害 -80%'},
@@ -718,7 +737,7 @@ const CARDS=[
    全局状态
    ========================================================================= */
 let P, enemies, projs, fxs, parts, nums, orbs;
-let floorN, roomN, kills, waves, waveIdx, roomAffix, nextAffix, cleared;
+let floorN, roomN, kills, waves, waveIdx, roomAffix, nextAffix, cleared, roomKind, siegeT;
 let cam, hitstop, flash, gameState='title', boss=null, runStart=0;
 const taken={};
 
@@ -738,7 +757,7 @@ function newPlayer(cls){
     sk:[0,0,0,0],
     act:null, combo:0, comboT:0,
     cds:[0,0,0,0],
-    inv:0, dashCd:0, dashBuf:0, flashT:0, jumpBuf:0,
+    inv:0, dashCd:0, dashBuf:0, flashT:0, jumpBuf:0, dashBufT:0, skBuf:null,
     danceHit:0, danceLv:0, lastHitT:-9,
     anim:0, walk:0, run:null, stepT:0, lean:0, air:false,
   };
@@ -761,22 +780,58 @@ function resetRun(cls){
 function scaleHp(){ return Math.pow(1.62, floorN-1) * (1 + (roomN-1)*.10); }
 function scaleAtk(){ return Math.pow(1.34, floorN-1) * (1 + (roomN-1)*.05); }
 
-function buildWaves(){
-  if(roomN===10) return [['boss']];
+/* 兵种按进度解锁，早期不会一上来就被夹 */
+function enemyPool(){
   const pool=['goblin','goblin','charger','archer'];
-  if(roomN>=3 || floorN>1) pool.push('shield');
-  if(roomN>=5 || floorN>1) pool.push('charger','archer');
-  const nWave = roomN<=4 ? 2 : 3;
+  if(roomN>=3 || floorN>1) pool.push('shield','bat');
+  if(roomN>=4 || floorN>1) pool.push('mage');
+  if(roomN>=5 || floorN>1) pool.push('bomber','charger');
+  if(roomN>=6 || floorN>1) pool.push('berserk','archer');
+  if(floorN>1) pool.push('mage','bomber','bat','berserk');
+  return pool;
+}
+/* 房间类型：普通 / 精英（少而强）/ 围攻（连绵不断） */
+function pickKind(){
+  if(roomN===10) return 'boss';
+  if(floorN===1 && roomN<=2) return 'normal';
+  if(roomN===5) return 'elite';
+  const r=Math.random();
+  if(r<.20) return 'elite';
+  if(r<.44) return 'siege';
+  return 'normal';
+}
+function buildWaves(){
+  if(roomN===10) return [[{t:'boss'}]];
+  const pool=enemyPool();
+  const base=clamp(3+Math.floor(roomN/2)+(floorN-1), 3, 8);
   const out=[];
-  for(let w=0; w<nWave; w++){
-    const n = clamp(3 + Math.floor(roomN/2) + (floorN-1), 3, 8);
-    const arr=[]; for(let i=0;i<n;i++) arr.push(pick(pool));
+  if(roomKind==='elite'){
+    const nEl=floorN>1?3:2;
+    const arr=[];
+    const strong=pool.filter(t=>t!=='bat'&&t!=='mini');
+    for(let i=0;i<nEl;i++) arr.push({t:pick(strong), el:true});
+    for(let i=0;i<Math.max(2,base-3);i++) arr.push({t:pick(pool)});
     out.push(arr);
+    const arr2=[]; for(let i=0;i<Math.max(2,base-2);i++) arr2.push({t:pick(pool)});
+    out.push(arr2);
+  } else if(roomKind==='siege'){
+    for(let w=0;w<5;w++){
+      const arr=[]; const n=Math.max(3,base-1);
+      for(let i=0;i<n;i++) arr.push({t:pick(pool)});
+      out.push(arr);
+    }
+  } else {
+    const nWave = roomN<=4 ? 2 : 3;
+    for(let w=0;w<nWave;w++){
+      const arr=[]; for(let i=0;i<base;i++) arr.push({t:pick(pool)});
+      out.push(arr);
+    }
   }
   return out;
 }
 
 function startRoom(){
+  roomKind=pickKind(); siegeT=0;
   waves=buildWaves(); waveIdx=0; cleared=false;
   roomAffix = nextAffix;
   // 预告下一间的词条
@@ -792,17 +847,17 @@ function startRoom(){
 
 function spawnWave(){
   const list=waves[waveIdx]||[];
-  list.forEach((t,i)=>{
-    const fromRight = t==='boss' ? true : Math.random()<.72;
+  list.forEach((it,i)=>{
+    const t=it.t, fromRight = t==='boss' ? true : Math.random()<.72;
     const e=makeEnemy(t,
       fromRight ? ROOM_W-40-ri(0,140) : 40+ri(0,140),
-      rnd(FLOOR_TOP+14, FLOOR_BOT-10));
+      rnd(FLOOR_TOP+14, FLOOR_BOT-10), it.el);
     e.spawnT = i*.16;
     enemies.push(e);
   });
 }
 
-function makeEnemy(type,x,y){
+function makeEnemy(type,x,y,elite){
   const d=ET[type];
   const e={
     type, x, y, z:0, vx:0, vy:0, vz:0, facing:-1,
@@ -810,7 +865,8 @@ function makeEnemy(type,x,y){
     maxHp:Math.round(d.hp*scaleHp()), atk:d.atk*scaleAtk(),
     st:'chase', t:0, shootT:rnd(.6,2), turnT:0, actId:0, walk:0,
     flashT:0, brkN:0, brkT:0, burn:0, burnT:0, slow:0, slowT:0,
-    stun:0, lean:0,
+    stun:0, lean:0, stunAcc:0, stunChain:0, chainT:0, poiseT:0,
+    poiseMax:(d.poise||1.3),
     affix:roomAffix?roomAffix.id:null, shieldUsed:false,
     dmgDone:false, spawnT:0, dead:false, hurtT:0,
   };
@@ -818,6 +874,15 @@ function makeEnemy(type,x,y){
   e.hp=e.maxHp;
   if(e.affix==='swift') e.spdMul=1.6; else e.spdMul=1;
   if(e.affix==='rage')  e.atk*=1.5;
+  // 精英：更肉更痛更抗打，体型也更大，脚下有金环
+  if(elite && type!=='boss'){
+    e.elite=true;
+    e.maxHp=Math.round(e.maxHp*1.9); e.hp=e.maxHp;
+    e.atk*=1.35; e.poiseMax*=1.7; e.spdMul*=1.08;
+    e.hw*=1.24; e.hd*=1.24; e.h*=1.20;
+  }
+  if(type==='bat'){ e.hoverZ=rnd(64,92); e.seed=rnd(0,6.3); e.diveT=rnd(.8,2.2); }
+  if(type==='bomber'){ e.fuseMax=4.5; }
   if(type==='boss'){ boss=e; document.getElementById('bossNm').textContent=d.nm; }
   return e;
 }
@@ -909,8 +974,8 @@ function castSword(i,up){
 }
 
 function doDash(){
-  if(P.dashCd>0 || P.inv>0) return;
-  let dx=(held.r?1:0)-(held.l?1:0), dy=(held.d?1:0)-(held.u?1:0);
+  if(P.dashCd>0) return;          // 只看冷却；以前还看 P.inv，导致刚被打完想跑却按不动
+  let dx=(DH('r')?1:0)-(DH('l')?1:0), dy=(DH('d')?1:0)-(DH('u')?1:0);
   if(!dx && !dy) dx=P.facing;
   const L=Math.hypot(dx,dy)||1;
   P.vx = dx/L*640; P.vy = dy/L*380;
@@ -950,15 +1015,26 @@ function hurtEnemy(e, mul, o){
   dmg=Math.max(1, Math.round(dmg));
   e.hp -= dmg; e.flashT=.10;
 
-  /* ---- 硬直：轻击小僵直，重击直接打断敌人动作 ---- */
+  /* ---- 硬直 + 韧性 ----
+     连续挨打时硬直逐次递减，累计量打满 poiseMax 就强制进入「霸体反击」：
+     不再吃硬直、立刻恢复行动。否则按住平A 就能把怪永久锁死，完全没有还手机会。 */
   const isBoss = e.type==='boss';
   let stun = (o.st!=null ? o.st : .20);
-  if(isBoss) stun = Math.min(stun*.28, .16);           // Boss 霸体，不能被锁死
-  if(isBoss && (e.st==='leap'||e.st==='summon')) stun = 0;  // 大招期间完全霸体
-  e.stun = Math.max(e.stun, stun);
-  // 打断起手 / 攻击动作
-  if(!isBoss && e.st!=='chase'){
-    if(e.st!=='rush' || stun>=.35){ e.st='chase'; e.t=0; e.dmgDone=false; }
+  if(e.poiseT>0) stun = 0;                                  // 霸体中：照样掉血，但不僵直
+  if(isBoss) stun = Math.min(stun*.28, .16);
+  if(isBoss && (e.st==='leap'||e.st==='summon')) stun = 0;
+  if(stun>0){
+    stun *= Math.max(.32, 1 - e.stunChain*.17);             // 连续命中递减
+    e.stunChain++; e.stunAcc += stun; e.chainT=1.0;
+    e.stun = Math.max(e.stun, stun);
+    if(!isBoss && e.stunAcc >= e.poiseMax){                 // 韧性被打满 → 反击
+      e.stunAcc=0; e.stunChain=0; e.stun=0; e.lean=0;
+      e.poiseT=1.15; e.st='chase'; e.t=0; e.dmgDone=false;
+      fxs.push({k:'poise', x:e.x, y:e.y, z:e.z+e.h*.55, t:0, dur:.42});
+      SND.poise();
+    } else if(!isBoss && e.st!=='chase'){
+      if(e.st!=='rush' || stun>=.35){ e.st='chase'; e.t=0; e.dmgDone=false; }
+    }
   }
   // 受击后仰
   const ld = o.aoe ? (Math.sign(e.x-P.x)||1) : P.facing;
@@ -1017,8 +1093,12 @@ function killEnemy(e){
   if(e.type==='boss'){
     for(let i=0;i<5;i++) dropOrb(e.x+rnd(-60,60), e.y+rnd(-22,22), e.h*.5, P.maxHp*.09);
   } else {
-    const rate=(e.type==='mini'?.06:.14)*(1+P.orbRate);
-    if(Math.random()<rate) dropOrb(e.x, e.y, e.z+e.h*.5, P.maxHp*.07);
+    if(e.elite){
+      for(let i=0;i<2;i++) dropOrb(e.x+rnd(-28,28), e.y+rnd(-14,14), e.z+e.h*.5, P.maxHp*.07);
+    } else {
+      const rate=(e.type==='mini'?.06:.14)*(1+P.orbRate);
+      if(Math.random()<rate) dropOrb(e.x, e.y, e.z+e.h*.5, P.maxHp*.07);
+    }
   }
   particles(e.x,e.y,e.z+e.h*.5, 18, e.col);
   fxs.push({k:'pop', x:e.x, y:e.y, z:e.z+e.h*.5, t:0, dur:.3, c:e.col});
@@ -1144,17 +1224,21 @@ function updPlayer(dt){
 
   /* ---- 奔跑：双击左右进入，松开 / 反向 / 出招时退出 ---- */
   if(runReq){ if(!P.act && !airborne0) P.run=runReq; runReq=null; }
-  if(P.run && (!held[P.run] || (P.run==='l'&&held.r) || (P.run==='r'&&held.l))) P.run=null;
+  if(P.run && (!DH(P.run) || (P.run==='l'&&DH('r')) || (P.run==='r'&&DH('l')))) P.run=null;
 
   // 闪避 / 跳跃
-  if(tapped('dash')){ doDash(); P.run=null; }
+  if(tapped('dash')) P.dashBufT=.30;
+  if(P.dashBufT>0){
+    P.dashBufT-=dt;
+    if(P.dashCd<=0){ P.dashBufT=0; doDash(); P.run=null; }
+  }
   /* 跳跃输入缓冲 + 取消后摇：
      平A 是主输出、玩家会一直按着 X，如果要求「不在出招中」才能跳，C 键几乎永远按不出来。
      所以：按下先存 0.22 秒，只要伤害帧已经打完就允许用跳跃打断后摇。 */
-  if(tapped('jump')) P.jumpBuf=.22;
+  if(tapped('jump')) P.jumpBuf=.28;
   if(P.jumpBuf>0) P.jumpBuf-=dt;
   const actRecovering = !P.act ||
-      (P.act.hits.every(h=>h.done) && (!P.act.spawn || P.act.spawn.done) && P.act.kind!=='sk');
+      (P.act.hits.every(h=>h.done) && (!P.act.spawn || P.act.spawn.done));
   if(P.jumpBuf>0 && !airborne0 && actRecovering){
     P.jumpBuf=0; P.act=null;
     P.vz=JUMP_V; SND.jump();
@@ -1164,7 +1248,7 @@ function updPlayer(dt){
   const airborne = P.z>.5 || P.vz>0;
 
   // 技能（同样需要缓冲 —— 奔跑/连招中按下不能被吃掉）
-  for(let i=0;i<4;i++) if(tapped('s'+i)) P.skBuf={i, t:.28};
+  for(let i=0;i<4;i++) if(tapped('s'+i)) P.skBuf={i, t:.45};
   if(P.skBuf){
     P.skBuf.t-=dt;
     if(P.skBuf.t<=0) P.skBuf=null;
@@ -1202,7 +1286,7 @@ function updPlayer(dt){
 
   /* ---- 移动：地面出招时锁死，空中始终可微调 ---- */
   if(airborne || !P.act){
-    const mx=(held.r?1:0)-(held.l?1:0), my=(held.d?1:0)-(held.u?1:0);
+    const mx=(DH('r')?1:0)-(DH('l')?1:0), my=(DH('d')?1:0)-(DH('u')?1:0);
     if(mx||my){
       const L=Math.hypot(mx,my)||1;
       const sp=P.moveBase*P.moveMul*(P.run?1.75:1)*(airborne?.60:1);
@@ -1255,6 +1339,9 @@ function updEnemy(e,dt){
   if(e.spawnT>0){ e.spawnT-=dt; return; }
   e.flashT-=dt; e.stun-=dt; e.brkT-=dt;
   e.lean += (0-e.lean)*Math.min(1, dt*8);   // 后仰回正
+  if(e.poiseT>0) e.poiseT-=dt;
+  if(e.chainT>0) e.chainT-=dt;
+  else { e.stunChain=0; e.stunAcc=Math.max(0, e.stunAcc-dt*1.3); }
   if(e.brkT<=0) e.brkN=0;
   // 灼烧 / 减速
   if(e.burnT>0){ e.burnT-=dt; e.hp-=e.burn*dt; }
@@ -1264,7 +1351,11 @@ function updEnemy(e,dt){
   // 物理
   e.x+=e.vx*dt; e.y+=e.vy*dt;
   e.vx*=Math.pow(.004,dt); e.vy*=Math.pow(.004,dt);
-  e.vz-=GRAV*dt; e.z+=e.vz*dt;
+  if(e.type==='bat' && e.stun<=0 && e.hp>0){
+    const tz=e.hoverZ+Math.sin(now()*4+e.seed)*11;   // 自主悬停
+    e.vz+=(tz-e.z)*9*dt; e.vz*=Math.pow(.02,dt);
+    e.z+=e.vz*dt;
+  } else e.vz-=GRAV*dt, e.z+=e.vz*dt;                 // 硬直中的魔蝠会掉到地上
   if(e.z<=0){
     if(e.vz<-260){ particles(e.x,e.y,4,6,'#8a7a66'); cam.shake=Math.max(cam.shake,4); }
     e.z=0; e.vz=0;
@@ -1274,7 +1365,7 @@ function updEnemy(e,dt){
   if(e.hp<=0){ killEnemy(e); return; }
   if(e.stun>0) return;                                    // 硬直中完全无法行动
   // 浮空中也无法行动 —— 但 Boss 跳砸需要在空中追踪玩家
-  if(e.z>2 && !(e.type==='boss' && e.st==='leap')) return;
+  if(e.z>2 && e.type!=='bat' && !(e.type==='boss' && e.st==='leap')) return;
 
   const sp = ET[e.type].spd * e.spdMul * (e.slowT>0?.62:1);
   const dx = P.x-e.x, dy = P.y-e.y, dist=Math.abs(dx);
@@ -1333,6 +1424,82 @@ function updEnemy(e,dt){
       }
     } else if(e.t<=0){ e.st='chase'; }
     break;
+
+  /* 术士：不贴身，在你脚下种延时爆炸圈 —— 逼你一直动 */
+  case 'mage':
+    e.shootT-=dt;
+    if(e.st==='chase'){ face();
+      if(dist<230) approach(-.8);
+      else if(dist>420) approach(.85);
+      if(e.shootT<=0 && dist<480){ e.st='wind'; e.t=.50; SND.ewind(); }
+    } else if(e.st==='wind'){
+      if(e.t<=0){
+        projs.push({own:'e', k:'zone', x:P.x, y:P.y, z:0,
+          vx:0, vy:0, r:66, fuse:.85, t:0, dmg:e.atk*1.15, life:9});
+        SND.eshoot();
+        e.st='rec'; e.t=.55; e.shootT=rnd(2.6,3.6);
+      }
+    } else if(e.t<=0){ e.st='chase'; }
+    break;
+
+  /* 爆弹鬼：冲过来自爆。在引信烧完前杀掉它就没事 */
+  case 'bomber':
+    e.fuseMax-=dt;
+    if(e.st==='chase'){ face(); approach(1);
+      if((dist<52 && Math.abs(dy)<26) || e.fuseMax<=0){ e.st='fuse'; e.t=.85; SND.ewind(); }
+    } else if(e.st==='fuse'){
+      if(e.t<=0){
+        const R=94;
+        fxs.push({k:'ring',x:e.x,y:e.y,t:0,dur:.42,r:R});
+        cam.shake=Math.max(cam.shake,16); flash=Math.max(flash,.22); SND.quake();
+        if(Math.hypot(P.x-e.x,(P.y-e.y)*1.6)<R && P.z<95) hurtPlayer(e.atk, e.x);
+        for(const o of enemies) if(o!==e && !o.dead &&
+            Math.hypot(o.x-e.x,(o.y-e.y)*1.6)<R){ o.hp-=e.atk*1.5; o.flashT=.1; }
+        e.hp=0; killEnemy(e);
+      }
+    }
+    break;
+
+  /* 魔蝠：高速盘旋，俯冲撞人，被打会掉到地上 */
+  case 'bat':
+    e.diveT-=dt;
+    if(e.st==='chase'){ face();
+      const L=Math.hypot(dx,dy*1.6)||1;
+      e.x+=dx/L*sp*dt + Math.cos(now()*3+e.seed)*38*dt;
+      e.y+=dy/L*sp*.5*dt;
+      if(e.diveT<=0 && dist<300){ e.st='wind'; e.t=.34; }
+    } else if(e.st==='wind'){
+      if(e.t<=0){
+        const L=Math.hypot(dx,dy*1.6)||1;
+        e.vx=dx/L*520; e.vy=dy/L*260; e.hoverZ=Math.max(8,P.z+14);
+        e.st='dive'; e.t=.42; e.dmgDone=false;
+      }
+    } else if(e.st==='dive'){
+      if(!e.dmgDone && Math.abs(P.x-e.x)<26 && Math.abs(P.y-e.y)<22 && Math.abs(P.z-e.z)<64){
+        hurtPlayer(e.atk, e.x); e.dmgDone=true;
+      }
+      if(e.t<=0){ e.hoverZ=rnd(64,92); e.st='chase'; e.diveT=rnd(1.4,2.6); }
+    }
+    break;
+
+  /* 狂战士：血厚韧性高，半血后暴怒，三连击 */
+  case 'berserk': {
+    if(!e.rage && e.hp < e.maxHp*.5){
+      e.rage=true; e.spdMul*=1.55;
+      fxs.push({k:'poise',x:e.x,y:e.y,z:e.z+e.h*.5,t:0,dur:.5}); SND.poise();
+    }
+    const rm=e.rage?1.35:1;
+    if(e.st==='chase'){ face();
+      if(dist<58 && Math.abs(dy)<26){ e.st='wind'; e.t=.55/rm; SND.ewind(); }
+      else approach();
+    } else if(e.st==='wind'){
+      if(e.t<=0){ e.st='sw1'; e.t=.20/rm; eStrike(e,40,44,30,.85); }
+    } else if(e.st==='sw1'){
+      if(e.t<=0){ e.st='sw2'; e.t=.22/rm; eStrike(e,44,46,30,.85); }
+    } else if(e.st==='sw2'){
+      if(e.t<=0){ e.st='rec'; e.t=.75/rm; eStrike(e,50,54,34,1.3); }
+    } else if(e.t<=0){ e.st='chase'; }
+    break; }
 
   case 'shield':
     e.turnT-=dt;
@@ -1464,6 +1631,17 @@ function updProjs(dt){
       }
       continue;
     }
+    /* 术士的地面延时爆炸圈 */
+    if(p.k==='zone'){
+      p.t+=dt;
+      if(p.t>=p.fuse){
+        p.life=0;
+        fxs.push({k:'ring',x:p.x,y:p.y,t:0,dur:.40,r:p.r});
+        cam.shake=Math.max(cam.shake,9); SND.boom();
+        if(Math.hypot(P.x-p.x,(P.y-p.y)*1.6)<p.r && P.z<80) hurtPlayer(p.dmg,p.x);
+      }
+      continue;
+    }
     p.x+=p.vx*dt; p.y+=p.vy*dt; p.life-=dt;
     if(p.own==='p'){
       const rx=p.big?26:20, ry=p.big?22:16;
@@ -1522,9 +1700,11 @@ function update(dt){
   cam.x += (tx-cam.x)*Math.min(1, dt*7);
   cam.ox=rnd(-1,1)*cam.shake; cam.oy=rnd(-1,1)*cam.shake*.6;
 
-  // 清屋判定
-  if(!cleared && enemies.length===0){
+  // 清屋判定（围攻房不等打完就放下一波，压力连绵）
+  const thresh = roomKind==='siege' ? 2 : 0;
+  if(!cleared && enemies.length<=thresh){
     if(waveIdx < waves.length-1){ waveIdx++; spawnWave(); }
+    else if(enemies.length>0){ /* 围攻最后一波还没清完，继续打 */ }
     else {
       cleared=true; SND.clear();
       healPlayer(P.maxHp*(.06+P.roomHeal));      // 清屋回血
@@ -1672,12 +1852,23 @@ function drawEnemy(e){
   }
   shadow(e.x,e.y,e.z,e.hw*1.1);
   // 远程敌人：脚下常驻紫环，一眼认出谁会放冷箭
-  if(e.type==='archer'){
+  if(RANGED[e.type] || e.elite){
     const [gx,gy]=W2S(e.x,e.y,0);
     ctx.save(); ctx.globalCompositeOperation='lighter';
     ctx.globalAlpha=.42+Math.sin(now()*4+e.x)*.12;
-    ctx.strokeStyle='#c88bff'; ctx.lineWidth=2.2;
-    ctx.beginPath(); ctx.ellipse(gx,gy,e.hw+9,(e.hw+9)*.42,0,0,7); ctx.stroke();
+    ctx.strokeStyle=e.elite?'#ffd479':(e.type==='mage'?'#5ee0f0':'#c88bff');
+    ctx.lineWidth=e.elite?3:2.2;
+    ctx.beginPath(); ctx.ellipse(gx,gy,e.hw+11,(e.hw+11)*.42,0,0,7); ctx.stroke();
+    ctx.restore();
+  }
+  // 爆弹鬼引信：红圈越涨越大，涨满就炸
+  if(e.type==='bomber' && e.st==='fuse'){
+    const k=1-Math.max(0,e.t)/.85, [gx,gy]=W2S(e.x,e.y,0);
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha=.28+k*.48; ctx.strokeStyle='#ff7a3a'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.ellipse(gx,gy,94*k,94*.4*k,0,0,7); ctx.stroke();
+    ctx.globalAlpha=.30+k*.5; ctx.fillStyle='#ff8a4a';
+    ctx.beginPath(); ctx.ellipse(gx,gy,94*k,94*.4*k,0,0,7); ctx.fill();
     ctx.restore();
   }
   const [sx,sy]=W2S(e.x,e.y,e.z);
@@ -1700,6 +1891,14 @@ function drawEnemy(e){
     ctx.ellipse(sx,sy-e.h*.5,e.hw*1.5,e.h*.72,0,0,7); ctx.fill(); ctx.restore(); }
   humanoid(sx,sy,{w:e.hw*1.5,h:e.h,col:e.col,dk:e.dk,face:e.facing,
     walk:e.walk||0, flash:Math.max(0,e.flashT), lean:e.lean||0});
+  // 霸体反击中：金色外环，看到就该走位而不是继续贴脸
+  if(e.poiseT>0){
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha=.40+Math.sin(now()*16)*.22;
+    ctx.strokeStyle='#ffe066'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.ellipse(sx,sy-e.h*.5,e.hw*1.9,e.h*.62,0,0,7); ctx.stroke();
+    ctx.restore();
+  }
   // 硬直星星：被打懵的视觉提示
   if(e.stun>.18 && e.type!=='boss'){
     ctx.save(); ctx.globalAlpha=Math.min(1,e.stun*2.2);
@@ -1719,8 +1918,45 @@ function drawEnemy(e){
     ctx.strokeStyle='#e8d9a0'; ctx.lineWidth=2.4;
     ctx.beginPath(); ctx.arc(sx+e.facing*17, sy-e.h*.58, 12, -1.1, 1.1); ctx.stroke();
   }
+  if(e.type==='mage'){                       // 法杖 + 杖头宝石
+    ctx.strokeStyle='#7a6a55'; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.moveTo(sx+e.facing*15, sy-4);
+    ctx.lineTo(sx+e.facing*20, sy-e.h*1.15); ctx.stroke();
+    ctx.fillStyle='#7ff0ff';
+    ctx.beginPath(); ctx.arc(sx+e.facing*20, sy-e.h*1.18, 5.5, 0, 7); ctx.fill();
+  }
+  if(e.type==='bomber'){                     // 背上的炸药桶
+    ctx.fillStyle='#5a3a1a'; ctx.strokeStyle='#2b1a0c'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.roundRect(sx-e.facing*20-8, sy-e.h*.78, 16, 20, 3);
+    ctx.fill(); ctx.stroke();
+    ctx.fillStyle='#ffdc6a';
+    ctx.beginPath(); ctx.arc(sx-e.facing*20, sy-e.h*.82, 3.5, 0, 7); ctx.fill();
+  }
+  if(e.type==='bat'){                        // 翅膀拍动
+    const f=Math.sin(now()*22+e.seed)*.8;
+    ctx.fillStyle=e.dk; ctx.globalAlpha=.9;
+    for(const sd of [-1,1]){
+      ctx.beginPath();
+      ctx.moveTo(sx, sy-e.h*.6);
+      ctx.quadraticCurveTo(sx+sd*24, sy-e.h*.6-14-f*10, sx+sd*30, sy-e.h*.5+f*7);
+      ctx.quadraticCurveTo(sx+sd*16, sy-e.h*.5, sx, sy-e.h*.45);
+      ctx.fill();
+    }
+    ctx.globalAlpha=1;
+  }
+  if(e.type==='berserk' && e.rage){          // 暴怒红气
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    ctx.globalAlpha=.30+Math.sin(now()*11)*.14; ctx.fillStyle='#ff3a2a';
+    ctx.beginPath(); ctx.ellipse(sx,sy-e.h*.5,e.hw*1.9,e.h*.68,0,0,7); ctx.fill();
+    ctx.restore();
+  }
   ctx.restore();
 
+  if(e.elite){
+    ctx.fillStyle='#ffd479'; ctx.textAlign='center';
+    ctx.font='700 10px "PingFang SC","Microsoft YaHei",sans-serif';
+    ctx.fillText('精英 '+e.nm, sx, sy-e.h-24);
+  }
   // 血条
   if(e.hp<e.maxHp && e.type!=='boss'){
     const w=e.hw*2.4, hx=sx-w/2, hy=sy-e.h-13;
@@ -1765,6 +2001,11 @@ function drawFx(f){
     for(let i=1;i<7;i++) ctx.lineTo(sx+rnd(-12,12), sy-260+i*37);
     ctx.stroke();
     ctx.globalAlpha=a*.5; ctx.lineWidth=12; ctx.stroke();
+  } else if(f.k==='poise'){
+    ctx.globalAlpha=a*.95; ctx.strokeStyle='#ffe066'; ctx.lineWidth=5*(1-k);
+    ctx.beginPath(); ctx.arc(sx,sy,14+k*54,0,7); ctx.stroke();
+    ctx.globalAlpha=a*.5; ctx.lineWidth=13*(1-k);
+    ctx.beginPath(); ctx.arc(sx,sy,14+k*40,0,7); ctx.stroke();
   } else if(f.k==='pop'){
     ctx.globalAlpha=a*.7; ctx.strokeStyle=f.c; ctx.lineWidth=4*(1-k);
     ctx.beginPath(); ctx.arc(sx,sy,10+k*44,0,7); ctx.stroke();
@@ -1791,6 +2032,14 @@ function drawFx(f){
 function drawProj(p){
   const [sx,sy]=W2S(p.x,p.y,p.z);
   ctx.save(); ctx.globalCompositeOperation='lighter';
+  if(p.k==='zone'){                      // 落点预警：圈收缩到底就炸
+    const k=clamp(p.t/p.fuse,0,1);
+    ctx.globalAlpha=.30+k*.42; ctx.strokeStyle='#ff5a7a'; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.ellipse(sx,sy,p.r,p.r*.4,0,0,7); ctx.stroke();
+    ctx.globalAlpha=.16+k*.30; ctx.fillStyle='#ff4a6a';
+    ctx.beginPath(); ctx.ellipse(sx,sy,p.r*k,p.r*.4*k,0,0,7); ctx.fill();
+    ctx.restore(); return;
+  }
   if(p.k==='blade'){
     if(p.delay>0){                       // 落点预警圈
       const [gx,gy]=W2S(p.x,p.y,0);
@@ -1913,6 +2162,10 @@ function syncHUD(){
   if(ghostHp>r) ghostHp += (r-ghostHp)*.08;
   $('hptxt').textContent=`${Math.ceil(P.hp)} / ${P.maxHp}`;
   $('fN').textContent=floorN; $('rN').textContent=roomN; $('kN').textContent=kills;
+  const kn=$('kindN');
+  kn.textContent = roomKind==='elite'?'· 精英房' : roomKind==='siege'?'· 围攻房'
+                 : roomKind==='boss'?'· BOSS' : '';
+  kn.style.color = roomKind==='elite'?'#ffd479' : roomKind==='siege'?'#ff9ab4' : '#ffb4a0';
 
   const at=$('affixTip');
   if(roomAffix){ at.className=''; at.innerHTML=`本间敌人：<b>${roomAffix.nm}</b> · ${roomAffix.ds}`; }
@@ -1954,6 +2207,16 @@ const KEYDOC=[
  ['M','静音 / 取消静音'],
 ];
 
+const TIPDOC=[
+ ['韧性','敌人被连续打会积攒韧性，满了会<b>金光一闪进入霸体</b> —— 此时打不出硬直，它会立刻反击。看到金环就该走位，不要继续贴脸站桩'],
+ ['紫环','脚下有<b>紫环</b>的是远程兵。弓手开枪前会画一条横贯屏幕的红线，<b>上下走一步就能躲</b>'],
+ ['青环','<b>术士</b>会在你脚下种延时爆炸圈，圈涨满就炸 —— 别站着不动'],
+ ['橙圈','<b>爆弹鬼</b>会冲过来自爆，引信亮起后有 0.85 秒。<b>在它炸之前杀掉就完全没事</b>，炸到自己人也算伤害'],
+ ['盾卫','正面减伤 78%，但转身有 1.3 秒延迟 —— <b>绕到背后打</b>。子弹一样会被盾挡'],
+ ['金环','<b>精英怪</b>更肉更痛、韧性更高，但必掉两颗血球'],
+ ['房型','<b>精英房</b>怪少而强；<b>围攻房</b>不等你清完就放下一波，别贪刀'],
+];
+
 function showPause(){
   $('pSkills').innerHTML =
     `<div class="skRow"><div class="kb">X</div><div class="txt">
@@ -1968,6 +2231,8 @@ function showPause(){
     }).join('');
 
   $('pKeys').innerHTML = KEYDOC.map(([k,d])=>
+    `<div class="skRow"><div class="kb">${k}</div><div class="txt">${d}</div></div>`).join('');
+  $('pTips').innerHTML = TIPDOC.map(([k,d])=>
     `<div class="skRow"><div class="kb">${k}</div><div class="txt">${d}</div></div>`).join('');
 
   const rows=[
@@ -2008,7 +2273,9 @@ $('btnResume').onclick=resumeGame;
 $('btnPause').onclick=()=>{ if(gameState==='play') pauseGame(); };
 $('btnMute').onclick=()=>{ SND.toggle(); showPause(); };
 $('btnTouch').onclick=()=>{ touchMode=!touchMode; document.body.classList.toggle('touch',touchMode);
-  if(!touchMode){ STICK.on=false; STICK.dx=STICK.dy=0; for(const p of PADS) held[p.k]=false; }
+  if(!touchMode){ STICK.on=false; STICK.dx=STICK.dy=0;
+    sHeld.l=sHeld.r=sHeld.u=sHeld.d=false;
+    for(const p of PADS) held[p.k]=false; }
   showPause(); };
 $('btnFull').onclick=()=>{ const d=document.documentElement;
   if(document.fullscreenElement) document.exitFullscreen();

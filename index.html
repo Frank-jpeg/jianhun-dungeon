@@ -9,10 +9,10 @@
   html,body{width:100%;height:100%;overflow:hidden;background:#08060a;
     font-family:"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
     -webkit-font-smoothing:antialiased;user-select:none}
-  #stage{position:absolute;left:50%;top:50%;width:960px;height:540px;
+  #stage{position:absolute;left:50%;top:50%;width:960px;height:540px;touch-action:none;
     transform-origin:center center;background:#100c12;overflow:hidden;
     box-shadow:0 0 0 2px #2b2130,0 20px 70px rgba(0,0,0,.8)}
-  canvas{position:absolute;inset:0;width:960px;height:540px;display:block}
+  canvas{position:absolute;inset:0;width:960px;height:540px;display:block;touch-action:none}
 
   /* ---------- HUD ---------- */
   #hud{position:absolute;inset:0;pointer-events:none;font-size:13px;color:#e8dfd0}
@@ -58,6 +58,17 @@
   .bf.c{border-color:#8e3050;color:#ff9ab4;background:rgba(60,18,34,.85)}
 
   #dashHint{position:absolute;left:340px;bottom:22px;font-size:12px;color:#6f6478}
+  body.touch #dashHint,body.touch #basic,body.touch #skills,body.touch #buffs{display:none}
+  #btnPause{position:absolute;left:326px;top:11px;width:42px;height:22px;border-radius:5px;
+    background:rgba(40,32,50,.78);border:1px solid #55446b;color:#c3b0e0;
+    display:none;align-items:center;justify-content:center;font-size:12px;
+    font-weight:700;letter-spacing:2px;pointer-events:auto;cursor:pointer}
+  body.touch #btnPause{display:flex}
+  #rotate{position:fixed;inset:0;z-index:99;display:none;flex-direction:column;
+    align-items:center;justify-content:center;gap:14px;background:#08060a;
+    color:#ffd479;font-size:19px;letter-spacing:3px;text-align:center}
+  #rotate small{color:#9c8f7d;font-size:13px;letter-spacing:1px}
+  @media (orientation:portrait) and (pointer:coarse){ #rotate{display:flex} }
 
   /* ---------- 弹层 ---------- */
   .modal{position:absolute;inset:0;display:flex;flex-direction:column;
@@ -158,6 +169,7 @@
 </style>
 </head>
 <body>
+<div id="rotate">请横屏游玩<small>把设备转到横向，画面会自动铺满</small></div>
 <div id="stage">
   <canvas id="cv" width="960" height="540"></canvas>
 
@@ -173,6 +185,7 @@
       <div class="nm" id="bossNm">巨魔王</div>
       <div class="bar"><i id="bossFill" style="background:linear-gradient(180deg,#c65a3a,#6e2412)"></i></div>
     </div>
+    <div id="btnPause">❚❚</div>
     <div id="basic">主输出：按住 <b>X</b> 平A 连击</div>
     <div id="skills"></div>
     <div id="dashHint">空格 闪避 · <b>C</b> 跳跃 · 双击 ←→ 奔跑 · Esc 菜单</div>
@@ -245,6 +258,8 @@
       <div class="pBot">
         <label>音量 <input type="range" id="vol" min="0" max="100" value="50"></label>
         <button class="btn2" id="btnMute">静音 M</button>
+        <button class="btn2" id="btnTouch">触摸操作</button>
+        <button class="btn2" id="btnFull">全屏</button>
         <button class="btn" id="btnResume">继 续 Esc</button>
         <button class="btn2" id="btnQuit">放弃本局</button>
       </div>
@@ -442,6 +457,139 @@ addEventListener('keydown',e=>{
 addEventListener('keyup',e=>{ const k=KEYMAP[e.code]; if(!k) return; e.preventDefault(); held[k]=false; });
 addEventListener('blur',()=>{ for(const k in held) held[k]=false; });
 const tapped=k=>{ if(hit[k]){ hit[k]=false; return true; } return false; };
+
+/* =========================================================================
+   触摸操作（手机 / 平板）—— 左摇杆 + 右下大攻击键 + 环绕技能键
+   ========================================================================= */
+let touchMode = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
+const STICK={on:false, id:null, bx:152, by:410, dx:0, dy:0, R:66};
+const PADS=[
+  {k:'atk', nm:'攻击', x:855, y:455, r:54, big:true},
+  {k:'s0',  sk:0, x:745, y:445, r:31},
+  {k:'s1',  sk:1, x:771, y:384, r:31},
+  {k:'s2',  sk:2, x:827, y:349, r:31},
+  {k:'s3',  sk:3, x:893, y:352, r:31},
+  {k:'jump',nm:'跳', x:668, y:398, r:30},
+  {k:'dash',nm:'闪', x:660, y:487, r:30},
+];
+const touchOwner=new Map();     // touch.identifier -> 'stick' | 按键名
+let stickFar=false;
+
+function toLogical(t){
+  const r=cv.getBoundingClientRect(), s=r.width/CW || 1;
+  return [(t.clientX-r.left)/s, (t.clientY-r.top)/s];
+}
+function padAt(lx,ly){
+  for(const p of PADS){
+    const rr=p.r+14;
+    if((lx-p.x)*(lx-p.x)+(ly-p.y)*(ly-p.y) < rr*rr) return p;
+  }
+  return null;
+}
+function setStick(lx,ly){
+  let dx=lx-STICK.bx, dy=ly-STICK.by;
+  const d=Math.hypot(dx,dy);
+  if(d>STICK.R){ dx=dx/d*STICK.R; dy=dy/d*STICK.R; }
+  STICK.dx=dx; STICK.dy=dy;
+}
+function applyStick(){
+  if(!STICK.on){
+    if(touchMode){ held.l=held.r=held.u=held.d=false; }
+    stickFar=false; return;
+  }
+  const nx=STICK.dx/STICK.R, ny=STICK.dy/STICK.R;
+  const m=Math.hypot(nx,ny);
+  held.r = m>.26 && nx> .36;
+  held.l = m>.26 && nx<-.36;
+  held.d = m>.26 && ny> .40;
+  held.u = m>.26 && ny<-.40;
+  // 摇杆推到底 = 奔跑（手机上不用双击）
+  const far = m>.80 && Math.abs(nx)>.55;
+  if(far && !stickFar) runReq = nx>0?'r':'l';
+  if(!far && P) P.run=null;
+  stickFar=far;
+}
+function tStart(e){
+  if(!touchMode || gameState!=='play') return;
+  for(let i=0;i<e.changedTouches.length;i++){
+    const t=e.changedTouches[i], [lx,ly]=toLogical(t);
+    const p=padAt(lx,ly);
+    if(p){
+      touchOwner.set(t.identifier,p.k);
+      if(!held[p.k]) hit[p.k]=true;
+      held[p.k]=true;
+    } else if(lx < CW*.48 && !STICK.on){
+      touchOwner.set(t.identifier,'stick');
+      STICK.on=true; STICK.id=t.identifier;
+      STICK.bx=clamp(lx,95,375); STICK.by=clamp(ly,175,470);
+      setStick(lx,ly);
+    }
+  }
+  e.preventDefault();
+}
+function tMove(e){
+  if(!touchMode) return;
+  for(let i=0;i<e.changedTouches.length;i++){
+    const t=e.changedTouches[i];
+    if(touchOwner.get(t.identifier)!=='stick') continue;
+    const [lx,ly]=toLogical(t); setStick(lx,ly);
+  }
+  e.preventDefault();
+}
+function tEnd(e){
+  for(let i=0;i<e.changedTouches.length;i++){
+    const t=e.changedTouches[i], own=touchOwner.get(t.identifier);
+    if(own===undefined) continue;
+    touchOwner.delete(t.identifier);
+    if(own==='stick'){
+      STICK.on=false; STICK.id=null; STICK.dx=STICK.dy=0;
+      held.l=held.r=held.u=held.d=false;
+      if(P) P.run=null;
+    } else held[own]=false;
+  }
+  e.preventDefault();
+}
+cv.addEventListener('touchstart', tStart, {passive:false});
+cv.addEventListener('touchmove',  tMove,  {passive:false});
+cv.addEventListener('touchend',   tEnd,   {passive:false});
+cv.addEventListener('touchcancel',tEnd,   {passive:false});
+
+function drawTouchUI(){
+  if(!touchMode || gameState!=='play') return;
+  ctx.save();
+  ctx.textAlign='center'; ctx.textBaseline='middle';
+  // 摇杆
+  const s=STICK;
+  ctx.globalAlpha=s.on?.26:.12;
+  ctx.strokeStyle='#ffffff'; ctx.lineWidth=3;
+  ctx.beginPath(); ctx.arc(s.bx,s.by,s.R,0,7); ctx.stroke();
+  ctx.globalAlpha=s.on?.10:.05; ctx.fillStyle='#ffffff';
+  ctx.beginPath(); ctx.arc(s.bx,s.by,s.R,0,7); ctx.fill();
+  ctx.globalAlpha=s.on?.48:.20; ctx.fillStyle='#dfe8ff';
+  ctx.beginPath(); ctx.arc(s.bx+s.dx,s.by+s.dy,27,0,7); ctx.fill();
+  // 按键
+  for(const p of PADS){
+    const on=!!held[p.k];
+    ctx.globalAlpha=on?.60:.26;
+    ctx.fillStyle=p.big?'#c9a24a':(p.sk!=null?'#6f5ea8':'#4a6f8a');
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.fill();
+    if(p.sk!=null && P && P.cds[p.sk]>0){         // 冷却扇形
+      const full=SKILLS[p.sk].cd*(1-Math.min(P.cdr,.6));
+      const k=clamp(P.cds[p.sk]/full,0,1);
+      ctx.globalAlpha=.66; ctx.fillStyle='#0a0710';
+      ctx.beginPath(); ctx.moveTo(p.x,p.y);
+      ctx.arc(p.x,p.y,p.r,-Math.PI/2,-Math.PI/2+k*Math.PI*2); ctx.closePath(); ctx.fill();
+    }
+    ctx.globalAlpha=on?.95:.5; ctx.strokeStyle='#ffffff'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,7); ctx.stroke();
+    const label = p.nm!=null ? p.nm : SKILLS[p.sk].nm;
+    ctx.globalAlpha=.96; ctx.fillStyle='#ffffff';
+    const fs = p.big?20 : (label.length>=4?10:label.length===3?11.5:14);
+    ctx.font=`800 ${fs}px "PingFang SC","Microsoft YaHei",sans-serif`;
+    ctx.fillText(label, p.x, p.y+1);
+  }
+  ctx.restore();
+}
 
 /* =========================================================================
    数据表
@@ -1363,6 +1511,7 @@ function updMisc(dt){
    主更新
    ========================================================================= */
 function update(dt){
+  applyStick();
   updPlayer(dt);
   for(const e of enemies) updEnemy(e,dt);
   enemies=enemies.filter(e=>!e.dead);
@@ -1729,6 +1878,8 @@ function render(){
   const vg=ctx.createRadialGradient(CW/2,CH/2,CH*.42,CW/2,CH/2,CH*.95);
   vg.addColorStop(0,'rgba(0,0,0,0)'); vg.addColorStop(1,'rgba(0,0,0,.55)');
   ctx.fillStyle=vg; ctx.fillRect(0,0,CW,CH);
+
+  drawTouchUI();
 }
 
 /* =========================================================================
@@ -1845,6 +1996,8 @@ function showPause(){
   const bm=$('btnMute');
   bm.className='btn2'+(SND.isMuted()?' mut':'');
   bm.textContent=SND.isMuted()?'已静音 M':'静音 M';
+  const bt=$('btnTouch');
+  bt.textContent=touchMode?'触摸操作 · 开':'触摸操作 · 关';
   $('mPause').classList.remove('off');
 }
 function pauseGame(){ gameState='pause'; showPause(); }
@@ -1852,7 +2005,15 @@ function resumeGame(){ gameState='play'; $('mPause').classList.add('off'); }
 
 $('vol').oninput=e=>SND.setVol(e.target.value/100);
 $('btnResume').onclick=resumeGame;
+$('btnPause').onclick=()=>{ if(gameState==='play') pauseGame(); };
 $('btnMute').onclick=()=>{ SND.toggle(); showPause(); };
+$('btnTouch').onclick=()=>{ touchMode=!touchMode; document.body.classList.toggle('touch',touchMode);
+  if(!touchMode){ STICK.on=false; STICK.dx=STICK.dy=0; for(const p of PADS) held[p.k]=false; }
+  showPause(); };
+$('btnFull').onclick=()=>{ const d=document.documentElement;
+  if(document.fullscreenElement) document.exitFullscreen();
+  else if(d.requestFullscreen) d.requestFullscreen();
+  else if(d.webkitRequestFullscreen) d.webkitRequestFullscreen(); };
 $('btnQuit').onclick=()=>{ $('mPause').classList.add('off'); gameOver(); };
 
 /* =========================================================================
@@ -1990,6 +2151,7 @@ function frame(t){
 }
 
 /* 启动 */
+document.body.classList.toggle('touch',touchMode);
 resetRun('sword'); syncBuffs(); gameState='title';
 requestAnimationFrame(frame);
 </script>

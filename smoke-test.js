@@ -61,9 +61,15 @@ class FakeAudio {
   resume() {}
 }
 const timers = [];
+const lsStore = {};
 const sandbox = {
   document: doc, window: null, console,
   AudioContext: FakeAudio, webkitAudioContext: FakeAudio,
+  localStorage: {
+    getItem: (k) => (k in lsStore ? lsStore[k] : null),
+    setItem: (k, v) => { lsStore[k] = String(v); },
+    removeItem: (k) => { delete lsStore[k]; },
+  },
   performance: { now: () => Date.now() },
   requestAnimationFrame: noop,
   setInterval: () => 0, clearInterval: noop,
@@ -145,6 +151,65 @@ globalThis.__winPath = function(){
 
   return errs;
 };
+globalThis.__records = function(){
+  const errs = [];
+
+  // ---- 存档层：file:// 下浏览器可能直接禁掉 localStorage 并抛异常，必须静默降级 ----
+  const real = globalThis.localStorage;
+  globalThis.localStorage = {
+    getItem(){ throw new Error('blocked'); },
+    setItem(){ throw new Error('blocked'); },
+  };
+  try {
+    if (loadSave().ngMax !== 1) errs.push('localStorage 被禁时 loadSave 没退回默认值');
+    writeSave();                                   // 不许抛出去
+  } catch (e) {
+    errs.push('localStorage 被禁时存档层抛了异常：' + e.message);
+  }
+  globalThis.localStorage = real;
+
+  // ---- recordRun：三个指标各走各的，不许互相覆盖 ----
+  SAVE.ngMax = 1; for (const k in SAVE.best) delete SAVE.best[k];
+  ngLevel = 1;
+
+  floorN = 4; roomN = 2; kills = 100;
+  if (!recordRun(false, 300)) errs.push('第一次留记录应该算破纪录');
+
+  floorN = 3; roomN = 1; kills = 500;             // 更浅但杀得更多
+  recordRun(false, 200);
+  let b = SAVE.best[1];
+  if (b.floor !== 4 || b.room !== 2) errs.push('更浅的一局把最深纪录冲掉了：' + b.floor + '-' + b.room);
+  if (b.kills !== 500) errs.push('击杀纪录没取历史最大：' + b.kills);
+
+  floorN = FLOORS; roomN = ROOMS; kills = 200;    // 首次通关
+  if (!recordRun(true, 600)) errs.push('首次通关应该算破纪录');
+  b = SAVE.best[1];
+  if (!b.cleared || b.time !== 600) errs.push('通关时间没记上：' + JSON.stringify(b));
+  if (b.kills !== 500) errs.push('通关把击杀纪录冲掉了：' + b.kills);
+
+  if (recordRun(true, 900)) errs.push('更慢的通关不该算新纪录');
+  if (SAVE.best[1].time !== 600) errs.push('更慢的通关覆盖了最佳时间：' + SAVE.best[1].time);
+  if (!recordRun(true, 400)) errs.push('更快的通关应该算新纪录');
+
+  // ---- 周目倍率：血和攻必须同倍率，这是上一轮踩过的坑 ----
+  ngLevel = 1; if (ngMul() !== 1) errs.push('第 1 周目倍率应为 1，实际 ' + ngMul());
+  floorN = 5; roomN = 3;
+  ngLevel = 1; const h1 = scaleHp(), a1 = scaleAtk();
+  ngLevel = 3; const h3 = scaleHp(), a3 = scaleAtk();
+  if (!(h3 > h1)) errs.push('周目没有放大敌人血量');
+  if (Math.abs((h3 / h1) - (a3 / a1)) > 1e-9)
+    errs.push('周目对血/攻的放大不一致：血 ×' + (h3 / h1).toFixed(4) + ' 攻 ×' + (a3 / a1).toFixed(4));
+
+  // ---- 通关解锁下一周目 ----
+  SAVE.ngMax = 1; ngPick = 1;
+  startGame('sword');
+  gameState = 'play'; floorN = FLOORS; roomN = ROOMS;
+  roomClear(); __drain();
+  if (SAVE.ngMax !== 2) errs.push('通关后没解锁第 2 周目：ngMax=' + SAVE.ngMax);
+
+  ngLevel = 1; ngPick = 1;
+  return errs;
+};
 globalThis.__takeAll = function(){
   // 逐张应用所有卡片，抓 ap() 里的错误和 NaN
   const bad = [];
@@ -192,6 +257,17 @@ try {
                          : '✅ 通关流程正常：中间层进下一层，第 10 层 Boss 清完即通关');
   if (bad.length) fail++;
 } catch (e) { console.log('❌ 通关流程测试报错：' + e.message); fail++; }
+
+try {
+  const bad = sandbox.__records();
+  console.log(bad.length ? '❌ 记录 / 周目：\n   ' + bad.join('\n   ')
+                         : '✅ 记录与周目正常：存档可降级、三项纪录互不覆盖、通关解锁下一周目');
+  if (bad.length) fail++;
+} catch (e) {
+  console.log('❌ 记录 / 周目测试报错：' + e.message);
+  console.log('   ' + (e.stack || '').split('\n').slice(1, 4).join('\n   '));
+  fail++;
+}
 
 try {
   const bad = sandbox.__takeAll();

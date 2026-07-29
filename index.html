@@ -139,6 +139,11 @@
 
   #ovStats{font-size:14px;line-height:2.1;color:#b8ab9c;text-align:center;margin-bottom:24px}
   #ovStats b{color:#ffd479;font-size:19px}
+  #ovStats .nr{font-style:normal;font-weight:800;font-size:12px;letter-spacing:1px;
+    color:#241a08;background:linear-gradient(180deg,#c9a24a,#8f6d24);
+    padding:2px 8px;border-radius:5px;vertical-align:2px}
+  #ovStats .dim{color:#6f675c;font-size:12px}
+  #ovStats .unlock{color:#8fd0ff;font-size:15px}
   .btn{pointer-events:auto;padding:11px 34px;border-radius:7px;cursor:pointer;
     background:linear-gradient(180deg,#c9a24a,#8f6d24);border:none;color:#241a08;
     font-size:15px;font-weight:800;font-family:inherit;letter-spacing:2px}
@@ -148,6 +153,17 @@
     color:#a99e91;margin-bottom:4px}
   .keys b{color:#8fd0ff;font-family:ui-monospace,Menlo,monospace;font-weight:700}
   .keys i{color:#ffd479;font-style:normal}
+
+  /* 周目选择 + 最佳记录（标题页） */
+  .ngRow{display:flex;gap:7px;justify-content:center;align-items:center;margin-bottom:10px}
+  .ngRow.off{display:none}
+  .ngRow>span{font-size:12px;color:#9c8f7d;margin-right:2px}
+  .ngb{padding:3px 13px;border-radius:6px;cursor:pointer;font-size:12px;font-weight:700;
+    background:rgba(255,255,255,.05);border:1px solid #4a4034;color:#a99e91}
+  .ngb:hover{border-color:#8a7448}
+  .ngb.on{background:linear-gradient(180deg,#c9a24a,#8f6d24);border-color:#c9a24a;color:#241a08}
+  .rec{font-size:11.5px;color:#7d7466;margin-bottom:16px;min-height:15px}
+  .rec b{color:#ffd479;font-weight:700}
 
   /* ---------- 职业选择 ---------- */
   #clsRow{display:flex;gap:18px;margin-bottom:16px}
@@ -236,6 +252,8 @@
   <div class="modal" id="mTitle">
     <div class="mt" style="font-size:24px">剑 魂 地 下 城</div>
     <div class="ms" style="margin-bottom:14px">横版清屋 · 肉鸽构筑 —— 选一个职业</div>
+    <div class="ngRow off" id="ngRow"></div>
+    <div class="rec" id="recLine"></div>
     <div id="clsRow">
       <div class="ccard" data-cls="sword">
         <div class="chd"><span class="cnm">鬼剑士</span><span class="ckey">1</span></div>
@@ -321,6 +339,22 @@
 const CW=960, CH=540;
 const FLOOR_TOP=318, FLOOR_BOT=506;   // 可站立的纵深范围
 const ROOM_W=1200;                     // 房间世界宽度（可视 960，所以只横滚 240）
+
+/* ---------- 存档 ----------
+   游戏是双击 file:// 打开的，部分浏览器在这个协议下直接禁掉 localStorage 并抛异常。
+   所以读写全部 try 兜底：存不了就当没有记录，游戏本身照常能玩。 */
+const SAVE_KEY='jianhun.save.v1';
+function loadSave(){
+  try{
+    const s=JSON.parse(localStorage.getItem(SAVE_KEY));
+    if(s && typeof s==='object')
+      return {ngMax:Math.max(1, s.ngMax|0), best:(s.best && typeof s.best==='object')?s.best:{}};
+  }catch(e){}
+  return {ngMax:1, best:{}};
+}
+function writeSave(){ try{ localStorage.setItem(SAVE_KEY, JSON.stringify(SAVE)); }catch(e){} }
+const SAVE=loadSave();
+const fmtTime=t=>`${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
 const GRAV=1500;                       // 敌人重力（低 → 浮空久，方便追击）
 const ROOMS=7;                         // 每层房间数（第 ROOMS 间是 Boss）
 const FLOORS=10;                       // 总层数 —— 打完第 FLOORS 层 Boss 即通关
@@ -885,6 +919,7 @@ const CARDS=[
 let P, enemies, projs, fxs, parts, nums, orbs;
 let floorN, roomN, kills, waves, waveIdx, roomAffix, nextAffix, cleared, roomKind, siegeT;
 let cam, hitstop, flash, gameState='title', boss=null, runStart=0;
+let ngLevel=1, ngPick=Math.max(1, SAVE.ngMax|0);   // 本局周目 / 标题页当前选中的周目
 const taken={};
 
 function newPlayer(cls){
@@ -932,6 +967,7 @@ function resetRun(cls){
   applyClass(cls||'sword');
   P=newPlayer(cls||'sword'); enemies=[]; projs=[]; fxs=[]; parts=[]; nums=[]; orbs=[];
   floorN=1; roomN=1; kills=0; boss=null;
+  ngLevel=clamp(ngPick|0, 1, Math.max(1, SAVE.ngMax|0));   // 只认已解锁的周目
   for(const k in taken) delete taken[k];
   cam={x:0, shake:0, ox:0, oy:0};
   hitstop=0; flash=0; runStart=now();
@@ -943,9 +979,11 @@ function resetRun(cls){
    房间 / 波次
    ========================================================================= */
 /* 血量指数必须贴着攻击指数走。原本 1.62 / 1.34，第 10 层是 ×77 血 / ×14 攻，
-   敌人变成「打不死也打不疼」的沙包 —— 最无聊的一种组合。现在拉回 1.8 倍差。 */
-function scaleHp(){ return Math.pow(1.42, floorN-1) * (1 + (roomN-1)*.10); }
-function scaleAtk(){ return Math.pow(1.31, floorN-1) * (1 + (roomN-1)*.05); }
+   敌人变成「打不死也打不疼」的沙包 —— 最无聊的一种组合。现在拉回 1.8 倍差。
+   周目倍率同样两边一起乘，别只加血。 */
+function ngMul(){ return 1 + (ngLevel-1)*.28; }
+function scaleHp(){ return Math.pow(1.42, floorN-1) * (1 + (roomN-1)*.10) * ngMul(); }
+function scaleAtk(){ return Math.pow(1.31, floorN-1) * (1 + (roomN-1)*.05) * ngMul(); }
 
 /* 兵种按进度解锁，早期不会一上来就被夹 */
 function enemyPool(){
@@ -3090,16 +3128,37 @@ function choose(i){
 /* =========================================================================
    流程
    ========================================================================= */
+/* 写本周目记录，返回「这局是否刷新了纪录」。
+   击杀数和最深处各取历史最大、通关时间取最小 —— 三个指标互不覆盖，
+   否则刷一次快通关就会把之前的最高击杀冲掉。 */
+function recordRun(cleared, t){
+  const b = SAVE.best[ngLevel] ||
+            (SAVE.best[ngLevel]={time:0, floor:0, room:0, kills:0, cleared:false});
+  let fresh=false;
+  if(kills>b.kills) b.kills=kills;
+  if(floorN>b.floor || (floorN===b.floor && roomN>b.room)){
+    b.floor=floorN; b.room=roomN;
+    if(!cleared) fresh=true;             // 没通关时，走得更深就算破纪录
+  }
+  if(cleared && (!b.cleared || t<b.time)){ b.time=t; b.cleared=true; fresh=true; }
+  writeSave();
+  return fresh;
+}
+
 function gameOver(){
   gameState='over';
   SND.over(); SND.intense(0);
   const t=Math.round(now()-runStart);
+  const prev=SAVE.best[ngLevel], deep=prev?`${prev.floor}-${prev.room}`:'';
+  const fresh=recordRun(false, t);
   $('ovTitle').textContent='你 倒 下 了';
-  $('ovSub').textContent=`死于第 ${floorN} 层 第 ${roomN} 间`;
+  $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+`死于第 ${floorN} 层 第 ${roomN} 间`;
   $('ovStats').innerHTML=
-    `到达深度 <b>${floorN}-${roomN}</b> / 共 ${FLOORS} 层<br>击杀敌人 <b>${kills}</b><br>` +
+    `到达深度 <b>${floorN}-${roomN}</b> / 共 ${FLOORS} 层` +
+      (fresh?' <i class="nr">最深纪录</i>':(deep?` <span class="dim">（最深 ${deep}）</span>`:'')) + `<br>` +
+    `击杀敌人 <b>${kills}</b><br>` +
     `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张<br>` +
-    `存活时间 <b>${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}</b>`;
+    `存活时间 <b>${fmtTime(t)}</b>`;
   $('mOver').classList.remove('off');
 }
 
@@ -3108,13 +3167,27 @@ function gameWin(){
   gameState='over';
   SND.clear(); SND.intense(0);
   const t=Math.round(now()-runStart);
+  const prev=SAVE.best[ngLevel];
+  const prevTime=(prev && prev.cleared)?prev.time:0;
+  const fresh=recordRun(true, t);
+  // 通关即解锁下一周目，并把标题页默认选到新那档 —— 这是「再来一局」的钩子
+  const unlocked = ngLevel>=SAVE.ngMax;
+  if(unlocked){ SAVE.ngMax=ngLevel+1; ngPick=SAVE.ngMax; writeSave(); }
+
   $('ovTitle').textContent='通 关';
-  $('ovSub').textContent=`${FLOORS} 层全部打通 —— 巨魔王已倒下`;
+  $('ovSub').textContent = ngLevel>1
+    ? `第 ${ngLevel} 周目 · ${FLOORS} 层全部打通`
+    : `${FLOORS} 层全部打通 —— 巨魔王已倒下`;
   $('ovStats').innerHTML=
+    `通关用时 <b>${fmtTime(t)}</b>` +
+      (fresh?' <i class="nr">新纪录</i>':(prevTime?` <span class="dim">（最佳 ${fmtTime(prevTime)}）</span>`:'')) + `<br>` +
     `击杀敌人 <b>${kills}</b><br>` +
     `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张<br>` +
-    `剩余生命 <b>${Math.max(0,Math.round(P.hp))} / ${Math.round(P.maxHp)}</b><br>` +
-    `通关用时 <b>${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}</b>`;
+    `剩余生命 <b>${Math.max(0,Math.round(P.hp))} / ${Math.round(P.maxHp)}</b>` +
+    (unlocked
+      ? `<br><br><b class="unlock">已解锁第 ${SAVE.ngMax} 周目</b>` +
+        `<br><span class="dim">敌人属性 ×${(1+(SAVE.ngMax-1)*.28).toFixed(2)}</span>`
+      : '');
   $('mOver').classList.remove('off');
 }
 
@@ -3132,12 +3205,40 @@ function toTitle(){
   $('mCards').classList.add('off');
   $('mPause').classList.add('off');
   $('mTitle').classList.remove('off');
+  syncTitle();
   gameState='title';
 }
+
+/* 标题页：周目选择条 + 该周目的最佳成绩。
+   ngMax===1 时整条藏起来 —— 第一次玩的人不该看到「周目」这个概念。 */
+function syncTitle(){
+  const max=Math.max(1, SAVE.ngMax|0), row=$('ngRow');
+  ngPick=clamp(ngPick|0, 1, max);
+  if(max<=1) row.classList.add('off');
+  else {
+    row.classList.remove('off');
+    row.innerHTML='<span>周目</span>';
+    for(let i=1;i<=max;i++){
+      const b=document.createElement('div');
+      b.className='ngb'+(i===ngPick?' on':'');
+      b.textContent=i;
+      b.title = i===1 ? '原始难度' : `敌人生命与攻击 ×${(1+(i-1)*.28).toFixed(2)}`;
+      b.onclick=()=>{ ngPick=i; syncTitle(); };
+      row.appendChild(b);
+    }
+  }
+  const b=SAVE.best[ngPick];
+  $('recLine').innerHTML = !b ? (max>1?'本周目还没有记录':'还没有记录 —— 打通 10 层试试')
+    : b.cleared
+      ? `最佳通关 <b>${fmtTime(b.time)}</b> · 最多击杀 <b>${b.kills}</b>`
+      : `最深 <b>${b.floor}-${b.room}</b> · 最多击杀 <b>${b.kills}</b> —— 还没通关`;
+}
+
 document.querySelectorAll('.ccard').forEach(el=>{
   el.onclick=()=>startGame(el.dataset.cls);
 });
 $('btnAgain').onclick=toTitle;
+syncTitle();                      // 开局先渲染一次标题页记录
 
 /* =========================================================================
    主循环

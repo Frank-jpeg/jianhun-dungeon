@@ -105,11 +105,15 @@ globalThis.__run = function(cls, frames){
     if (!isFinite(P.hp) || !isFinite(P.x) || !isFinite(P.y) || !isFinite(P.z))
       throw new Error('玩家数值变成 NaN，帧 ' + i + ' hp=' + P.hp + ' x=' + P.x);
     for (const e of enemies)
-      if (!isFinite(e.hp) || !isFinite(e.x))
+      if (!isFinite(e.hp) || !isFinite(e.x) || !isFinite(e.y))
         throw new Error('敌人数值 NaN（' + e.type + '）帧 ' + i);
-    for (const pr of projs)
-      if (!isFinite(pr.x) || !isFinite(pr.mul))
-        throw new Error('弹丸数值 NaN 帧 ' + i);
+    for (const pr of projs) {
+      // 玩家弹丸用 mul、敌人弹丸用 dmg。一律查 mul 会让每支敌人的箭都误报，
+      // 导致模拟在开局 1.5 秒就中断，后面几千帧根本没跑到。
+      const power = pr.own === 'p' ? pr.mul : pr.dmg;
+      if (!isFinite(pr.x) || !isFinite(pr.y) || !isFinite(power))
+        throw new Error('弹丸数值 NaN 帧 ' + i + ' → ' + JSON.stringify(pr));
+    }
   }
   return { 层:floorN, 间:roomN, 击杀:kills, 选卡次数:cards, 死亡次数:deaths,
            已拿卡:Object.keys(taken).length, 场上敌人:enemies.length,

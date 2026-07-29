@@ -60,9 +60,16 @@
   #basic b{color:#ffd479}
 
   #buffs{position:absolute;right:14px;bottom:14px;width:250px;display:flex;
-    flex-wrap:wrap;gap:4px;justify-content:flex-end;align-content:flex-end}
+    flex-wrap:wrap;gap:4px;justify-content:flex-end;align-content:flex-end;
+    pointer-events:auto;opacity:.62;transition:opacity .12s}
+  /* 后期二三十张卡会堆满右下角挡住战斗。平时压暗 + 只显示最近 10 张，
+     鼠标移上去才完整展开。 */
+  #buffs:hover{opacity:1}
+  #buffs:not(:hover) .bf.ex{display:none}
+  #buffs:hover .bf.more{display:none}
   .bf{padding:2px 7px;border-radius:9px;font-size:10.5px;background:rgba(40,32,50,.85);
-    border:1px solid #4a3d5c;color:#cfc0e6;white-space:nowrap}
+    border:1px solid #4a3d5c;color:#cfc0e6;white-space:nowrap;cursor:default}
+  .bf.more{border-color:#6b5c85;color:#9b8bb8;background:rgba(28,22,36,.9)}
   .bf.a{border-color:#a8762e;color:#ffcf85;background:rgba(60,42,20,.85)}
   .bf.c{border-color:#8e3050;color:#ff9ab4;background:rgba(60,18,34,.85)}
   .bf.e{border-color:#8e4470;color:#ffb0dc;background:rgba(60,20,44,.85)}
@@ -70,7 +77,16 @@
   .bf.L{border-color:#ff9a3a;color:#ffc07a;background:rgba(74,40,16,.92)}
 
   #dashHint{position:absolute;left:340px;bottom:22px;font-size:12px;color:#6f6478}
-  body.touch #dashHint,body.touch #basic,body.touch #skills,body.touch #buffs{display:none}
+  /* 强化说明浮层：摆在强化列表左边，避免展开时互相遮挡 */
+  #buffTip{position:absolute;right:274px;bottom:14px;width:236px;padding:8px 10px;
+    border-radius:8px;background:rgba(16,12,24,.95);border:1px solid #5a4a72;
+    color:#cfc0e6;font-size:11.5px;line-height:1.7;display:none;pointer-events:none;
+    box-shadow:0 4px 14px rgba(0,0,0,.6)}
+  #buffTip.on{display:block}
+  #buffTip b{color:#ffd479}
+  #buffTip i{color:#8fd0ff;font-style:normal}
+  body.touch #dashHint,body.touch #basic,body.touch #skills,body.touch #buffs,
+  body.touch #buffTip{display:none}
   #btnPause{position:absolute;left:326px;top:11px;width:42px;height:22px;border-radius:5px;
     background:rgba(40,32,50,.78);border:1px solid #55446b;color:#c3b0e0;
     display:none;align-items:center;justify-content:center;font-size:12px;
@@ -214,6 +230,7 @@
     <div id="skills"></div>
     <div id="dashHint"><b>C</b> 跳跃 · 双击 ←→ 奔跑 · Esc 菜单</div>
     <div id="buffs"></div>
+    <div id="buffTip"></div>
   </div>
 
   <div class="modal" id="mTitle">
@@ -739,6 +756,11 @@ const AFFIX=[
 ];
 
 /* ---------- 卡池（12 张平A线 / 7 张通用 / 5 张技能 / 2 张诅咒） ---------- */
+/* 「弹丸」是代码里的叫法，玩家看不懂。鬼剑士的剑气和神枪手的子弹在实现上是
+   同一个东西（都是 own:'p' 的 projs），但卡面上必须按职业说人话。
+   ds 是在选卡时才调用的，这时候 P 已经存在。 */
+const PJ = () => (P && P.cls==='gun') ? '子弹' : '剑气';
+
 const CARDS=[
  // ===== 平A 线：主输出成长树 =====
  {id:'edge', tag:'平A',max:5,gn:'高爆弹头',nm:'锋锐之刃', ds:v=>`平A 伤害 <i>+20%</i>`,            ap:p=>p.basicMul+=.20},
@@ -797,11 +819,11 @@ const CARDS=[
  {id:'streak',tag:'触发',max:2,nm:'连杀',     ds:`每<i>连续击杀 5 个</i>敌人回复 <i>7%</i> 生命（受伤会中断连杀）`, ap:p=>p.streakHeal+=.07},
 
  // ===== 弹道：远程/剑气修饰（霓虹深渊式，越叠越离谱）=====
- {id:'split', tag:'弹道',max:2,nm:'散射',     ds:`所有弹丸与剑气<i>额外多射 2 发</i>（伤害 70%）`, ap:p=>p.projN+=2},
- {id:'bounce',tag:'弹道',max:2,nm:'弹射',     ds:`弹丸打中敌人后<i>反弹</i>去找下一个目标`, ap:p=>p.bounce+=1},
- {id:'homing',tag:'弹道',max:2,nm:'追踪',     ds:`弹丸会<i>自动拐向</i>最近的敌人`, ap:p=>p.homing+=1},
- {id:'bigproj',tag:'弹道',max:3,nm:'巨弹',    ds:`弹丸体积 <i>+70%</i>，伤害 <i>+22%</i>`, ap:p=>p.projBig+=1},
- {id:'pierce',tag:'弹道',max:2,nm:'贯穿强化', ds:`弹丸<i>穿透数 +3</i>，且每穿透一个目标伤害 <i>+12%</i>`, ap:p=>p.pierceUp+=1},
+ {id:'split', tag:'弹道',max:2,nm:'散射',     ds:()=>`每次射出${PJ()}时<i>额外多射 2 发</i>（每发伤害 70%）`, ap:p=>p.projN+=2},
+ {id:'bounce',tag:'弹道',max:2,nm:'弹射',     ds:()=>`${PJ()}打中敌人后<i>反弹</i>去找下一个目标`, ap:p=>p.bounce+=1},
+ {id:'homing',tag:'弹道',max:2,nm:'追踪',     ds:()=>`${PJ()}会<i>自动拐向</i>最近的敌人`, ap:p=>p.homing+=1},
+ {id:'bigproj',tag:'弹道',max:3,nm:'巨弹',    ds:()=>`${PJ()}体积 <i>+70%</i>，伤害 <i>+22%</i>`, ap:p=>p.projBig+=1},
+ {id:'pierce',tag:'弹道',max:2,nm:'贯穿强化', ds:()=>`${PJ()}<i>可多穿透 3 个敌人</i>，且每穿透一个伤害 <i>+12%</i>`, ap:p=>p.pierceUp+=1},
 
  // ===== 防御 / 机动 =====
  {id:'ward',  tag:'续航',max:3,nm:'守护结界', ds:`每 <i>11 秒</i>获得一层护盾，<b>完全抵挡</b>一次伤害（最多叠 3 层）`, ap:p=>{p.wardCd=11;p.wardMax++;}},
@@ -826,14 +848,14 @@ const CARDS=[
 
  // ===== 生存（死亡细胞 · 霓虹深渊）=====
  {id:'laststand',tag:'续航',max:1,nm:'濒死活力',ds:`受到致命伤害时<b>锁血不死</b>，若 6 秒内击杀 <i>3 个</i>敌人则回复 40% 生命，否则倒下`, ap:p=>p.lastStand=1},
- {id:'necro', tag:'续航',max:2,nm:'死灵法术', ds:`每击杀 <i>4</i> 个敌人获得一层<b>护盾</b>`, ap:p=>p.killWard+=1},
+ {id:'necro', tag:'续航',max:2,nm:'死灵法术', ds:`每击杀 <i>4</i> 个敌人获得一层<b>护盾</b>（每层<b>完全抵挡</b>一次伤害，不论多重）`, ap:p=>p.killWard+=1},
  {id:'regen', tag:'续航',max:3,nm:'再生',    ds:`<i>脱离战斗 3 秒</i>后，每秒回复 1.6% 最大生命`, ap:p=>p.regen+=.016},
  {id:'corrupt',tag:'续航',max:2,nm:'腐化',   ds:`拾取<i>血球</i>后 5 秒内伤害 <i>+55%</i>`, ap:p=>p.orbRage+=.55},
- {id:'overload',tag:'续航',max:2,nm:'过载核心',ds:`每持有一层<b>护盾</b>，伤害 <i>+20%</i>`, ap:p=>p.wardDmg+=.20},
+ {id:'overload',tag:'续航',max:2,nm:'过载核心',ds:`每持有一层<b>护盾</b>，伤害 <i>+20%</i>（护盾来自守护结界 / 死灵法术）`, ap:p=>p.wardDmg+=.20},
 
  // ===== 弹道追加 =====
- {id:'projboom',tag:'弹道',max:2,nm:'爆裂弹头',ds:`弹丸与剑气命中时<b>产生爆炸</b>，波及周围敌人`, ap:p=>p.projBoom+=1},
- {id:'crown', tag:'弹道',max:2,nm:'弹幕皇冠', ds:`<b>本房间内</b>每击杀 3 个敌人，弹丸数 +1（进下一间重置）`, ap:p=>p.crown+=1},
+ {id:'projboom',tag:'弹道',max:2,nm:'爆裂弹头',ds:()=>`${PJ()}命中时<b>产生爆炸</b>，波及周围敌人`, ap:p=>p.projBoom+=1},
+ {id:'crown', tag:'弹道',max:2,nm:'弹幕皇冠', ds:()=>`<b>本房间内</b>每击杀 3 个敌人，每次<b>多射一发</b>${PJ()}（进下一间清零）`, ap:p=>p.crown+=1},
  {id:'minion',tag:'弹道',max:2,nm:'战魂',    ds:`召唤一个<b>自动攻击的战魂</b>，会自己找最近的敌人打`, ap:p=>p.minionN+=1},
  // ===== 组合卡（哈迪斯 Duo 式，需要前置）=====
  {id:'duo1', tag:'组合',max:1,nm:'炽烈风暴', ds:`<i>闪电会点燃</i>：连锁闪电命中的目标直接叠 2 层燃烧，且闪电伤害 +50%`, ap:p=>{p.duoStorm=1;p.chainN+=1}, req:['burn','chain']},
@@ -2845,16 +2867,33 @@ function syncHUD(){
   else $('bossWrap').classList.remove('on');
 }
 
+const BUFF_LIM=10;                    // 平时最多露出这么多，其余折进「+N」
 function syncBuffs(){
   const b=$('buffs'); b.innerHTML='';
   const order=Object.keys(taken);
-  for(const id of order){
+  const hid=Math.max(0, order.length-BUFF_LIM);
+  if(hid){
+    const m=document.createElement('div'); m.className='bf more';
+    m.textContent='+'+hid; b.appendChild(m);
+  }
+  order.forEach((id,i)=>{
     const c=CARDS.find(x=>x.id===id);
     const cls = c.tag==='平A'?'a' : c.tag==='诅咒'?'c':'';
-    const d=document.createElement('div'); d.className='bf '+cls;
+    // 折叠掉最早拿的那几张——刚拿的更需要一眼看到
+    const d=document.createElement('div'); d.className='bf '+cls+(i<hid?' ex':'');
     d.textContent = cardName(c) + (taken[id]>1?` ×${taken[id]}`:'');
+    /* 悬停查看效果：到后期光看名字根本想不起来这张是干嘛的 */
+    d.onmouseenter=()=>{
+      const lv=taken[id]||0;
+      const ds = typeof c.ds==='function' ? c.ds(lv) : c.ds;
+      const t=$('buffTip');
+      t.innerHTML=`<b>${cardName(c)}</b>${lv>1?` ×${lv}`:''}　`
+        +`<span style="color:#8b8095">${c.tag}</span><br>${ds}`;
+      t.classList.add('on');
+    };
+    d.onmouseleave=()=>$('buffTip').classList.remove('on');
     b.appendChild(d);
-  }
+  });
 }
 
 /* =========================================================================
@@ -2879,7 +2918,7 @@ const TIPDOC=[
  ['盾卫','<b>常驻霸体</b>，轻击完全打不动它。正面减伤 80%，远距离会举盾冲锋。<b>只有它转身那 0.55 秒和冲锋后摇是没有盾的</b>，抓这两个窗口'],
  ['状态','燃烧持续掉血 · 冰霜叠满 6 层<b>直接冻结</b> · 流血只在敌人<b>移动时</b>生效 · 厄运延迟 1.2 秒一次性爆发。敌人头顶的彩色圆点就是当前挂着的状态'],
  ['组合','拿齐两张特定元素卡后，会解锁<b>金色组合卡</b>（炽烈风暴 / 绝对零度 / 血债血偿），效果远超普通卡'],
- ['传奇','每打过一个 Boss，三选一里<b>必定有一张橙色传奇卡</b> —— 直接改变构筑上限'],
+ ['传奇','每打过一个 Boss，三选一<b>整排都是橙色传奇卡</b> —— 直接改变构筑上限（共 5 张，拿光后恢复普通卡）'],
  ['背刺','从敌人<b>背后</b>打有额外加成（影袭刃）。配合盾卫的绕后机制收益极高'],
  ['撞墙','拿了「巨浪」后，把敌人<b>击退撞到左右边界</b>会打出额外伤害并把它掀翻'],
  ['魅惑','被魅惑的敌人头顶有粉色「惑」，会<b>转头攻击自己的同伴</b>'],
@@ -2970,10 +3009,12 @@ function cardOk(c){
 }
 function drawCards(){
   const out=[];
-  // roomN 回到 1 说明刚打完 Boss —— 必给一张传奇
+  // roomN 回到 1 说明刚打完 Boss —— 整整一排全是传奇，不掺普通卡
   if(roomN===1 && floorN>1){
+    // 抽完就 splice 掉，避免 while + 随机重抽有概率空转
     const legs=CARDS.filter(c=>c.tag==='传奇' && cardOk(c));
-    if(legs.length) out.push(pick(legs));
+    while(out.length<3 && legs.length) out.push(legs.splice(ri(0,legs.length-1),1)[0]);
+    // 传奇共 5 张且都唯一，后期会拿光；不够 3 张时下面用普通卡补齐
   }
   const avail=CARDS.filter(c=>c.tag!=='传奇' && cardOk(c));
   const bag=[];

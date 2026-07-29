@@ -1249,7 +1249,10 @@ function hurtEnemy(e, mul, o){
   }
   // 击退 / 浮空
   const dir = o.dir!=null ? o.dir : (o.aoe ? (Math.sign(e.x-P.x)||1) : P.facing);
-  e.vx += dir*(o.kb||0)*(e.type==='boss'?.12:1);
+  /* 击退也要走韧性：霸体中完全免疫，连续命中逐次递减。
+     否则敌人打满韧性「恢复行动」后，仍被一下下推开，永远够不到玩家 —— 躺赢的根源。 */
+  const kbMul = e.poiseT>0 ? 0 : Math.max(.35, 1 - e.stunChain*.15);
+  e.vx += dir*(o.kb||0)*kbMul*(e.type==='boss'?.12:1);
   if(o.up) e.vz += o.up*(e.type==='boss'?.15:1);
 
   particles(e.x, e.y, e.z+e.h*.6, crit?12:6, crit?'#ffd34d':'#ffffff');
@@ -1996,8 +1999,9 @@ function updMinions(dt){
     m.y += (ty-m.y)*Math.min(1, dt*2.8);
     m.z = 44 + Math.sin(now()*3.4+m.a)*9;
     if(best && bd<52 && m.cd<=0){
-      m.cd=.80;
-      hurtEnemy(best, 1.15, {kb:50, st:.17, aoe:true, noChain:true});
+      m.cd=1.05;
+      // kb 压到很低：战魂的定位是补伤害，不是控场。带 2 个时它曾经能把全场敌人永久推开
+      hurtEnemy(best, 1.15, {kb:8, st:.17, aoe:true, noChain:true});
       fxs.push({k:'slash',x:best.x,y:best.y,z:best.z+26,t:0,dur:.16,f:1,r:28,c:'#bfe6ff'});
     }
   }

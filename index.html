@@ -47,6 +47,15 @@
   .sk .key{position:absolute;right:3px;bottom:1px;font-size:11px;font-weight:800;
     color:#8fd0ff;text-shadow:0 1px 2px #000}
   .sk.rdy{border-color:#c9a24a;box-shadow:0 0 12px rgba(201,162,74,.5),0 3px 10px rgba(0,0,0,.55)}
+  /* 闪避格：和技能同一排，但走冷色，一眼区分「这个不是技能」 */
+  .sk.dash{border-color:#3d5570;background:linear-gradient(160deg,#1f2a38,#131a24)}
+  .sk.dash .ico{color:#bcdcff}
+  .sk.dash .cdn{color:#8fd0ff}
+  .sk.dash .key{font-size:9.5px;right:3px;bottom:1px}
+  .sk.dash.rdy{border-color:#8fd0ff;
+    box-shadow:0 0 12px rgba(143,208,255,.55),0 3px 10px rgba(0,0,0,.55)}
+  .sk .chg{position:absolute;left:3px;top:1px;font-size:11px;font-weight:800;
+    color:#bcdcff;text-shadow:0 1px 2px #000}
   #basic{position:absolute;left:14px;bottom:80px;font-size:12px;color:#9c8f7d}
   #basic b{color:#ffd479}
 
@@ -203,7 +212,7 @@
     <div id="btnPause">❚❚</div>
     <div id="basic">主输出：按住 <b>X</b> 平A 连击</div>
     <div id="skills"></div>
-    <div id="dashHint">空格 闪避 · <b>C</b> 跳跃 · 双击 ←→ 奔跑 · Esc 菜单</div>
+    <div id="dashHint"><b>C</b> 跳跃 · 双击 ←→ 奔跑 · Esc 菜单</div>
     <div id="buffs"></div>
   </div>
 
@@ -981,12 +990,22 @@ function startRoom(){
 
 function spawnWave(){
   const list=waves[waveIdx]||[];
+  const SAFE=210;                       // 刷新点离玩家的最小横向距离
   list.forEach((it,i)=>{
     const t=it.t, fromRight = t==='boss' ? true : Math.random()<.72;
-    const e=makeEnemy(t,
-      fromRight ? ROOM_W-40-ri(0,140) : 40+ri(0,140),
-      rnd(FLOOR_TOP+14, FLOOR_BOT-10), it.el);
-    e.spawnT = i*.16;
+    let x = fromRight ? ROOM_W-40-ri(0,140) : 40+ri(0,140);
+    /* 左侧刷新区是 40..180，而开局玩家就站在 x=140 —— 正好重叠，
+       所以进门第一秒常常被贴脸开砍。后续波次同理（玩家可能正站在边上）。
+       统一推开到 SAFE 之外；那一侧贴墙就翻到另一侧。 */
+    if(Math.abs(x-P.x) < SAFE){
+      const away = x<P.x ? -1 : 1;
+      x = P.x + away*SAFE;
+      if(x<40 || x>ROOM_W-40) x = P.x - away*SAFE;
+      x = clamp(x, 40, ROOM_W-40);
+    }
+    const e=makeEnemy(t, x, rnd(FLOOR_TOP+14, FLOOR_BOT-10), it.el);
+    /* 第一只原本 spawnT=0，等于没有预警圈就直接出现。给所有人垫一个基础延迟。 */
+    e.spawnT = .38 + i*.16;
     enemies.push(e);
   });
 }
@@ -2757,6 +2776,7 @@ function render(){
    ========================================================================= */
 const $=id=>document.getElementById(id);
 const skEls=[];
+let dashEl=null;
 function buildSkillBar(){
   const box=$('skills'); if(!box) return;
   box.innerHTML=''; skEls.length=0;
@@ -2767,6 +2787,14 @@ function buildSkillBar(){
     box.appendChild(d);
     skEls.push({el:d, cd:d.querySelector('.cd'), n:d.querySelector('.cdn')});
   });
+  /* 闪避也占一格。它的充能过去是完全不可见的状态：按了没出，玩家只会以为
+     「按键没响应」。冷却本身很短（.62s），真正缺的是反馈。 */
+  const d=document.createElement('div'); d.className='sk dash';
+  d.innerHTML=`<div class="ico">闪</div><div class="cd"></div>
+    <div class="cdn"></div><div class="chg"></div><div class="key">空格</div>`;
+  box.appendChild(d);
+  dashEl={el:d, cd:d.querySelector('.cd'), n:d.querySelector('.cdn'),
+          chg:d.querySelector('.chg')};
 }
 /* 卡片名会随职业变化（鬼剑士叫「剑气纵横」，神枪手叫「穿甲弹链」） */
 function cardName(c){
@@ -2796,6 +2824,21 @@ function syncHUD(){
     const s=skEls[i], c=P.cds[i], full=SKILLS[i].cd*(1-Math.min(P.cdr,.6));
     if(c>0){ s.cd.style.height=(c/full*100)+'%'; s.n.textContent=c.toFixed(1); s.el.classList.remove('rdy'); }
     else { s.cd.style.height='0%'; s.n.textContent=''; s.el.classList.add('rdy'); }
+  }
+  if(dashEl){
+    const dFull=.62*(1-Math.min(.70,P.phantom*.35));
+    if(P.dashChg>0){                       // 还有充能 = 现在按得出来
+      dashEl.el.classList.add('rdy');
+      dashEl.n.textContent='';
+      // 满充能时不画黑条，否则「能用但在回复」看起来像不能用
+      dashEl.cd.style.height = P.dashChg<P.dashMax
+        ? (clamp(P.dashCd/dFull,0,1)*46)+'%' : '0%';
+    } else {                               // 真的按不出来，把还剩多久摆出来
+      dashEl.el.classList.remove('rdy');
+      dashEl.cd.style.height=(clamp(P.dashCd/dFull,0,1)*100)+'%';
+      dashEl.n.textContent=P.dashCd.toFixed(1);
+    }
+    dashEl.chg.textContent = P.dashMax>1 ? P.dashChg+'/'+P.dashMax : '';
   }
   if(boss){ $('bossWrap').classList.add('on');
     $('bossFill').style.transform=`scaleX(${clamp(boss.hp/boss.maxHp,0,1)})`; }

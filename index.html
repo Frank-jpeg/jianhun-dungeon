@@ -260,7 +260,7 @@
         <div class="csub">近战 · 高爆发</div>
         <div class="ctip">贴身输出，靠硬直和浮空把敌人锁死在原地。上手最简单，容错靠血厚。</div>
         <div class="cst"><span>生命 <b>130</b></span><span>移速 <b>215</b></span></div>
-        <div class="csk">Z 上挑 · S 三段斩 · D 崩山击 · F 波动剑</div>
+        <div class="csk">Z 上挑 · S 怒气爆发 · D 崩山击 · F 波动剑</div>
       </div>
       <div class="ccard g" data-cls="gun">
         <div class="chd"><span class="cnm">神枪手</span><span class="ckey">2</span></div>
@@ -722,7 +722,7 @@ const AERIAL_SWORD={dur:.34,at:.09,mul:1.70,kb:110,up:-300,hs:.075,st:.42,
                     ox:44,hw:48,hd:50,zt:420,fx:'sl3',nm:'空中斩'};
 const SKILLS_SWORD=[
  {key:'Z',nm:'上挑',  cd:2.0, ds:'向上斩击，将前方敌人<b>击飞浮空</b>。浮空的敌人无法行动，是起手技'},
- {key:'S',nm:'三段斩',cd:6.0, ds:'向前<b>突进</b>并连斩三次，可用来快速接近或穿过敌群'},
+ {key:'S',nm:'怒气爆发',cd:7.0, ds:'<b>瞬发</b>，以自身为中心爆开，把周围敌人<b>全部击飞</b>并短暂无敌。被围住时用来脱困'},
  {key:'D',nm:'崩山击',cd:12 , ds:'<b>向前跃起</b>重砸地面，<b>大范围</b>击飞所有敌人。清场和救命用'},
  {key:'F',nm:'波动剑',cd:8.0, ds:'发射<b>穿透剑气</b>，可以隔着一群怪打后排的弓手'},
 ];
@@ -825,7 +825,7 @@ const CARDS=[
  {id:'k0',   tag:'技能',max:1,nm:()=>SKILLS[0].nm+' · 强化',
   ds:()=>P.cls==='gun'?`<i>浮空弹</i>伤害 +48%，浮空更高`:`<i>上挑</i>范围 +60%，浮空更高，伤害 +50%`, ap:p=>p.sk[0]=1},
  {id:'k1',   tag:'技能',max:1,nm:()=>SKILLS[1].nm+' · 强化',
-  ds:()=>P.cls==='gun'?`<i>后跳散弹</i>由五发变为<i>七发</i>`:`<i>三段斩</i>变为四段，突进距离增加`, ap:p=>p.sk[1]=1},
+  ds:()=>P.cls==='gun'?`<i>后跳散弹</i>由五发变为<i>七发</i>`:`<i>怒气爆发</i>范围 +34%，伤害 +40%，无敌时间更长`, ap:p=>p.sk[1]=1},
  {id:'k2',   tag:'技能',max:1,nm:()=>SKILLS[2].nm+' · 强化',
   ds:()=>P.cls==='gun'?`<i>银光落刃</i>由八发变为<i>十一发</i>，覆盖面更广`:`<i>崩山击</i>落地追加左右冲击波，范围 +45%`, ap:p=>p.sk[2]=1},
  {id:'k3',   tag:'技能',max:1,nm:()=>SKILLS[3].nm+' · 强化',
@@ -1044,6 +1044,7 @@ function startRoom(){
   nextAffix = (floorN===1 && roomN<2) ? null : pick(AFFIX);
   P.x=140; P.y=440; P.z=0; P.vx=0; P.vz=0; P.act=null; P.combo=0; P.run=null;
   P.crownN=0; P.dashChg=P.dashMax;    // 弹幕皇冠每间重置；冲刺充能补满
+  P.cds=[0,0,0,0];                    // 技能冷却每间重置 —— 进门站着等 CD 是纯等待时间
   cam.x=0;
   boss=null; orbs=[]; projs=[];
   spawnWave();
@@ -1177,14 +1178,14 @@ function castSword(i,up){
     P.act={kind:'sk',id:0,t:0,dur:.42,hits:[{at:.12,ox:56,
       hw:(up?70:44)*(1+P.range*.4), hd:(up?88:56)*(1+P.range*.4), zt:175,
       mul:up?2.4:1.6, kb:50, up:up?520:430, hs:.075, st:.38, fx:'rise', done:false}]};
-  } else if(i===1){ // 三段斩
-    const n=up?4:3, ts=[.10,.24,.38,.52].slice(0,n);
-    ts.forEach((t,k)=>setTimeout(()=>{ if(gameState==='play') SND.tri(k); }, t*1000));
-    P.act={kind:'sk',id:1,t:0,dur:up?.72:.60,
-      hits:ts.map((at,k)=>({at, ox:56, hw:46, hd:50, zt:150,
-        mul:k===n-1?1.5:1.0, kb:k===n-1?210:45, up:0, hs:k===n-1?.08:.035,
-        st:k===n-1?.42:.20, fx:'tri', done:false})),
-      lunge:{from:.04, to:up?.60:.50, spd:up?540:470}};
+  } else if(i===1){ // 怒气爆发：瞬发、原地爆开，专门用来从怪堆里脱身
+    /* 和崩山击的分工全靠节奏：那边 at:.63 慢、有承诺、伤害 4.0 是清场技；
+       这边 at:.06 几乎立刻生效、伤害只有 1.6，换来的是无敌帧和「马上就能走」。
+       击退照常走 hurtEnemy 的韧性系统，霸体的怪推不动。 */
+    P.inv=Math.max(P.inv, up?.45:.30);
+    P.act={kind:'sk',id:1,t:0,dur:.46,hits:[{at:.06,ox:0,
+      hw:(up?150:112), hd:(up?107:80), zt:250, mul:up?2.24:1.60,
+      kb:300, up:150, hs:.10, st:.55, fx:'burst', aoe:true, shake:16, done:false}]};
   } else if(i===2){ // 崩山击（起跳高度按玩家重力换算，保证 0.63 秒落地对上命中帧）
     P.vz=850; SND.jump();
     // 滞空段带位移，落点在身前 —— 读起来是「跃过去砸」而不是原地起跳
@@ -1565,6 +1566,11 @@ function applyHit(h){
       for(const d of [-1,1]) projs.push({own:'p', k:'shock', x:P.x, y:P.y, z:8,
         vx:d*520, vy:0, mul:1.6, life:.85, pierce:true, hitSet:new Set()});
     }
+  } else if(fx==='burst'){
+    // 双环外扩，红橙色 —— 跟崩山击那圈金色震波区分开
+    fxs.push({k:'ring', x:P.x, y:P.y, t:0, dur:.34, r:h.hw*1.15, c:'#ff7a4a'});
+    fxs.push({k:'ring', x:P.x, y:P.y, t:0, dur:.50, r:h.hw*1.55, c:'#ffd06a'});
+    flash=Math.max(flash,.30); SND.boom();
   } else if(fx==='spin'){
     fxs.push({k:'spin', x:P.x, y:P.y, t:0, dur:.30, r:h.hw});
   } else {
@@ -2637,7 +2643,7 @@ function drawFx(f){
     ctx.globalAlpha=a*.85; ctx.strokeStyle='#ffe9b0'; ctx.lineWidth=7*(1-k*.5);
     ctx.beginPath(); ctx.ellipse(sx,sy-16,f.r*(.6+k*.6),f.r*.42*(.6+k*.6),0,0,7); ctx.stroke();
   } else if(f.k==='ring'){
-    ctx.globalAlpha=a*.9; ctx.strokeStyle='#ffcf7a'; ctx.lineWidth=9*(1-k);
+    ctx.globalAlpha=a*.9; ctx.strokeStyle=f.c||'#ffcf7a'; ctx.lineWidth=9*(1-k);
     ctx.beginPath(); ctx.ellipse(sx,sy,f.r*(.25+k*.9),f.r*.4*(.25+k*.9),0,0,7); ctx.stroke();
     ctx.globalAlpha=a*.35; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
     ctx.beginPath(); ctx.ellipse(sx,sy,f.r*(.15+k*.75),f.r*.4*(.15+k*.75),0,0,7); ctx.stroke();

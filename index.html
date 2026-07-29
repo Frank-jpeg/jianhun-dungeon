@@ -323,6 +323,7 @@ const FLOOR_TOP=318, FLOOR_BOT=506;   // 可站立的纵深范围
 const ROOM_W=1500;                     // 房间世界宽度
 const GRAV=1500;                       // 敌人重力（低 → 浮空久，方便追击）
 const ROOMS=7;                         // 每层房间数（第 ROOMS 间是 Boss）
+const FLOORS=10;                       // 总层数 —— 打完第 FLOORS 层 Boss 即通关
 const PGRAV=2700;                      // 玩家重力（高 → 跳跃干脆不飘）
 const JUMP_V=750;                      // 跳跃初速：顶点约 104，滞空 0.56 秒
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
@@ -688,7 +689,7 @@ const AERIAL_SWORD={dur:.34,at:.09,mul:1.70,kb:110,up:-300,hs:.075,st:.42,
 const SKILLS_SWORD=[
  {key:'Z',nm:'上挑',  cd:2.0, ds:'向上斩击，将前方敌人<b>击飞浮空</b>。浮空的敌人无法行动，是起手技'},
  {key:'S',nm:'三段斩',cd:6.0, ds:'向前<b>突进</b>并连斩三次，可用来快速接近或穿过敌群'},
- {key:'D',nm:'崩山击',cd:12 , ds:'跃起后重砸地面，<b>大范围</b>击飞所有敌人。清场和救命用'},
+ {key:'D',nm:'崩山击',cd:12 , ds:'<b>向前跃起</b>重砸地面，<b>大范围</b>击飞所有敌人。清场和救命用'},
  {key:'F',nm:'波动剑',cd:8.0, ds:'发射<b>穿透剑气</b>，可以隔着一群怪打后排的弓手'},
 ];
 
@@ -848,7 +849,7 @@ const CARDS=[
 
  // ===== 生存（死亡细胞 · 霓虹深渊）=====
  {id:'laststand',tag:'续航',max:1,nm:'濒死活力',ds:`受到致命伤害时<b>锁血不死</b>，若 6 秒内击杀 <i>3 个</i>敌人则回复 40% 生命，否则倒下`, ap:p=>p.lastStand=1},
- {id:'necro', tag:'续航',max:2,nm:'死灵法术', ds:`每击杀 <i>4</i> 个敌人获得一层<b>护盾</b>（每层<b>完全抵挡</b>一次伤害，不论多重）`, ap:p=>p.killWard+=1},
+ {id:'necro', tag:'续航',max:2,nm:'死灵法术', ds:`每击杀 <i>6</i> 个敌人补一层<b>护盾</b>（每层<b>完全抵挡</b>一次伤害，不论多重）。补盾后 <i>6 秒</i>内不再补，且不超过护盾上限`, ap:p=>p.killWard+=1},
  {id:'regen', tag:'续航',max:3,nm:'再生',    ds:`<i>脱离战斗 3 秒</i>后，每秒回复 1.6% 最大生命`, ap:p=>p.regen+=.016},
  {id:'corrupt',tag:'续航',max:2,nm:'腐化',   ds:`拾取<i>血球</i>后 5 秒内伤害 <i>+55%</i>`, ap:p=>p.orbRage+=.55},
  {id:'overload',tag:'续航',max:2,nm:'过载核心',ds:`每持有一层<b>护盾</b>，伤害 <i>+20%</i>（护盾来自守护结界 / 死灵法术）`, ap:p=>p.wardDmg+=.20},
@@ -914,7 +915,7 @@ function newPlayer(cls){
     // 机动
     jumpMax:1, jumps:0, dashMax:1, dashChg:1, killCdr:0, plan:0, planT:0,
     // 生存
-    lastStand:0, lastStandT:0, lastStandKills:0, killWard:0, killWardN:0,
+    lastStand:0, lastStandT:0, lastStandKills:0, killWard:0, killWardN:0, killWardCd:0,
     regen:0, noHitT:0, orbRage:0, orbRageT:0, wardDmg:0,
     // 弹道追加
     projBoom:0, crown:0, crownN:0, minionN:0, minions:[], chainFull:0, freezeFast:0,
@@ -941,8 +942,10 @@ function resetRun(cls){
 /* =========================================================================
    房间 / 波次
    ========================================================================= */
-function scaleHp(){ return Math.pow(1.62, floorN-1) * (1 + (roomN-1)*.10); }
-function scaleAtk(){ return Math.pow(1.34, floorN-1) * (1 + (roomN-1)*.05); }
+/* 血量指数必须贴着攻击指数走。原本 1.62 / 1.34，第 10 层是 ×77 血 / ×14 攻，
+   敌人变成「打不死也打不疼」的沙包 —— 最无聊的一种组合。现在拉回 1.8 倍差。 */
+function scaleHp(){ return Math.pow(1.42, floorN-1) * (1 + (roomN-1)*.10); }
+function scaleAtk(){ return Math.pow(1.31, floorN-1) * (1 + (roomN-1)*.05); }
 
 /* 兵种按进度解锁，早期不会一上来就被夹 */
 function enemyPool(){
@@ -1141,12 +1144,14 @@ function castSword(i,up){
       hits:ts.map((at,k)=>({at, ox:56, hw:46, hd:50, zt:150,
         mul:k===n-1?1.5:1.0, kb:k===n-1?210:45, up:0, hs:k===n-1?.08:.035,
         st:k===n-1?.42:.20, fx:'tri', done:false})),
-      lunge:{from:.04, to:up?.56:.44, spd:up?340:300}};
+      lunge:{from:.04, to:up?.60:.50, spd:up?540:470}};
   } else if(i===2){ // 崩山击（起跳高度按玩家重力换算，保证 0.63 秒落地对上命中帧）
     P.vz=850; SND.jump();
+    // 滞空段带位移，落点在身前 —— 读起来是「跃过去砸」而不是原地起跳
     P.act={kind:'sk',id:2,t:0,dur:.95,hits:[{at:.63,ox:0,
       hw:(up?210:145), hd:(up?150:105), zt:280, mul:4.0, kb:340, up:240,
-      hs:.13, st:.75, fx:'quake', aoe:true, shake:24, shock:up, done:false}]};
+      hs:.13, st:.75, fx:'quake', aoe:true, shake:24, shock:up, done:false}],
+      lunge:{from:.05, to:.60, spd:up?400:340}};
   } else { // 波动剑
     P.act={kind:'sk',id:3,t:0,dur:.42,hits:[],
       spawn:{at:.14, done:false, n:up?3:1}};
@@ -1325,9 +1330,14 @@ function killEnemy(e){
   // 击杀触发
   if(P.killHaste>0){ P.killLv=Math.min(3,P.killLv+1); P.killT=3.0; }
   if(P.killCdr>0) for(let i=0;i<4;i++) P.cds[i]=Math.max(0,P.cds[i]-P.killCdr);
-  if(P.killWard>0){
+  if(P.killWard>0 && P.killWardCd<=0){
     P.killWardN=(P.killWardN||0)+P.killWard;
-    if(P.killWardN>=4){ P.killWardN=0; P.ward=Math.min(Math.max(1,P.wardMax)+1,P.ward+1); }
+    // 每 6 杀补一层，补完进 6 秒冷却，且不超过护盾上限。
+    // 原本每 4 杀白给、上限还额外 +1 —— 后期一局上千杀，等于护盾永远是满的。
+    if(P.killWardN>=6){
+      P.killWardN=0;
+      if(P.ward<wardCap()){ P.ward++; P.killWardCd=6; }
+    }
   }
   if(P.crown>0){ P.crownN=(P.crownN||0)+1; }
   if(P.lastStandT>0){
@@ -1386,6 +1396,9 @@ function killEnemy(e){
   }
   if(e.type==='boss') boss=null;
 }
+
+/* 护盾上限：守护结界给多少就是多少；只有死灵法术时保底能挂 1 层 */
+function wardCap(){ return Math.max(P.wardMax, P.killWard>0?1:0); }
 
 function hurtPlayer(dmg, sx){
   if(P.inv>0) return;
@@ -1567,6 +1580,7 @@ function updPlayer(dt){
   if(P.killT>0){ P.killT-=dt; if(P.killT<=0) P.killLv=0; }
   if(P.wardT>0) P.wardT-=dt;
   else if(P.wardCd>0 && P.ward<P.wardMax){ P.wardT=P.wardCd; P.ward++; }
+  if(P.killWardCd>0) P.killWardCd-=dt;
   if(P.orbitN>0) P.orbitA=(P.orbitA||0)+dt*3.2;
   for(let i=0;i<4;i++) if(P.cds[i]>0) P.cds[i]-=dt;
   if(P.comboT<=0 && !P.act) P.combo=0;
@@ -2279,7 +2293,10 @@ function update(dt){
 
 function roomClear(){
   if(gameState!=='play') return;
-  if(roomN===ROOMS){ floorN++; roomN=1; } else roomN++;
+  if(roomN===ROOMS){
+    if(floorN>=FLOORS){ gameWin(); return; }   // 最终层 Boss 已倒下 —— 通关
+    floorN++; roomN=1;
+  } else roomN++;
   showCards();
 }
 
@@ -2832,7 +2849,7 @@ function syncHUD(){
   $('hpghost').style.transform=`scaleX(${ghostHp})`;
   if(ghostHp>r) ghostHp += (r-ghostHp)*.08;
   $('hptxt').textContent=`${Math.ceil(P.hp)} / ${P.maxHp}`;
-  $('fN').textContent=floorN; $('rN').textContent=roomN; $('kN').textContent=kills;
+  $('fN').textContent=floorN+' / '+FLOORS; $('rN').textContent=roomN; $('kN').textContent=kills;
   const kn=$('kindN');
   kn.textContent = roomKind==='elite'?'· 精英房' : roomKind==='siege'?'· 围攻房'
                  : roomKind==='boss'?'· BOSS' : '';
@@ -2958,7 +2975,7 @@ function showPause(){
     ['技能冷却缩减',`${Math.round(Math.min(P.cdr,.6)*100)}%`,               P.cdr>0],
     ['跳跃段数',    `${P.jumpMax}`,                                        P.jumpMax>1],
     ['闪避次数',    `${P.dashChg} / ${P.dashMax}`,                         P.dashMax>1],
-    ['护盾',        `${P.ward} / ${Math.max(0,P.wardMax)}`,                P.ward>0],
+    ['护盾',        `${P.ward} / ${wardCap()}`,                            P.ward>0],
   ];
   $('pStats').innerHTML = rows.map(([n,v,up])=>
     `<div class="stRow"><span>${n}</span><b class="${up?'up':''}">${v}</b></div>`).join('');
@@ -3035,7 +3052,9 @@ function showCards(){
   gameState='cards';
   pendingCards=drawCards();
   $('cardSub').textContent = roomN===1
-    ? `第 ${floorN-1} 层 已通关 —— 进入第 ${floorN} 层`
+    ? (floorN===FLOORS
+        ? `第 ${floorN-1} 层 已通关 —— 进入最终层`
+        : `第 ${floorN-1} 层 已通关 —— 进入第 ${floorN} 层`)
     : `第 ${roomN-1} 间 已清空`;
   const row=$('cardRow'); row.innerHTML='';
   pendingCards.forEach((c,i)=>{
@@ -3076,9 +3095,24 @@ function gameOver(){
   $('ovTitle').textContent='你 倒 下 了';
   $('ovSub').textContent=`死于第 ${floorN} 层 第 ${roomN} 间`;
   $('ovStats').innerHTML=
-    `到达深度 <b>${floorN}-${roomN}</b><br>击杀敌人 <b>${kills}</b><br>` +
+    `到达深度 <b>${floorN}-${roomN}</b> / 共 ${FLOORS} 层<br>击杀敌人 <b>${kills}</b><br>` +
     `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张<br>` +
     `存活时间 <b>${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}</b>`;
+  $('mOver').classList.remove('off');
+}
+
+/* 打完第 FLOORS 层 Boss —— 复用倒下弹层，只换文案 */
+function gameWin(){
+  gameState='over';
+  SND.clear(); SND.intense(0);
+  const t=Math.round(now()-runStart);
+  $('ovTitle').textContent='通 关';
+  $('ovSub').textContent=`${FLOORS} 层全部打通 —— 巨魔王已倒下`;
+  $('ovStats').innerHTML=
+    `击杀敌人 <b>${kills}</b><br>` +
+    `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张<br>` +
+    `剩余生命 <b>${Math.max(0,Math.round(P.hp))} / ${Math.round(P.maxHp)}</b><br>` +
+    `通关用时 <b>${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}</b>`;
   $('mOver').classList.remove('off');
 }
 

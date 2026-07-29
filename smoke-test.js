@@ -119,6 +119,32 @@ globalThis.__run = function(cls, frames){
            已拿卡:Object.keys(taken).length, 场上敌人:enemies.length,
            弹丸:projs.length, 特效:fxs.length, 粒子:parts.length, 血量:Math.round(P.hp) };
 };
+globalThis.__winPath = function(){
+  // 随机输入 5000 帧只跑得到第 1 层，通关那条路永远测不到。
+  // 这里直接把进度顶到 Boss 前，验证「中间层进下一层 / 最终层通关」两个分支。
+  const errs = [];
+  startGame('sword');
+
+  floorN = 3; roomN = ROOMS;
+  roomClear(); __drain();
+  if (floorN !== 4 || roomN !== 1)
+    errs.push('中间层 Boss 清完没进下一层：floorN=' + floorN + ' roomN=' + roomN);
+  if (gameState !== 'cards')
+    errs.push('中间层 Boss 清完没弹选卡：gameState=' + gameState);
+
+  gameState = 'play';
+  floorN = FLOORS; roomN = ROOMS;
+  roomClear(); __drain();
+  if (gameState !== 'over')
+    errs.push('最终层 Boss 清完没有通关：gameState=' + gameState);
+  if (floorN !== FLOORS)
+    errs.push('通关后层数还在涨：floorN=' + floorN + '（应停在 ' + FLOORS + '）');
+  const title = $('ovTitle').textContent || '';
+  if (title.indexOf('通') < 0)
+    errs.push('通关标题没设置：' + JSON.stringify(title));
+
+  return errs;
+};
 globalThis.__takeAll = function(){
   // 逐张应用所有卡片，抓 ap() 里的错误和 NaN
   const bad = [];
@@ -160,6 +186,13 @@ for (const cls of ['sword', 'gun']) {
     console.log('   ' + (e.stack || '').split('\n').slice(1, 4).join('\n   '));
   }
 }
+try {
+  const bad = sandbox.__winPath();
+  console.log(bad.length ? '❌ 通关流程：\n   ' + bad.join('\n   ')
+                         : '✅ 通关流程正常：中间层进下一层，第 10 层 Boss 清完即通关');
+  if (bad.length) fail++;
+} catch (e) { console.log('❌ 通关流程测试报错：' + e.message); fail++; }
+
 try {
   const bad = sandbox.__takeAll();
   console.log(bad.length ? '❌ 卡片问题：\n   ' + bad.join('\n   ')

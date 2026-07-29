@@ -31,7 +31,9 @@
 - **工作流**：他在 Windows 上玩。改完 `git push`，他刷新网页即可——
   **不要让他手动传文件**。
 
-> 推送若被 SSL 掐断，走本地代理：`git -c http.proxy=http://127.0.0.1:7897 push`
+> **clone / pull / push 都要走本地代理**，直连会 `schannel: failed to receive handshake`。
+> Mac 和 Windows 上端口都是 `7897`：
+> `git -c http.proxy=http://127.0.0.1:7897 -c https.proxy=http://127.0.0.1:7897 push`
 
 ## 四、跑测试
 
@@ -50,6 +52,15 @@ node smoke-test.js index.html
 
 **改 `roomClear` / `FLOORS` / `recordRun` / `ngMul` 时，这两段是唯一的护栏。**
 
+改 HUD / 弹层 / 标题页这类**看得见的东西**，冒烟测试只验逻辑、验不了渲染。
+浏览器工具拦 `file://`，得起个临时静态服务器（脚本别放仓库里）：
+
+```bash
+node -e "const h=require('http'),f=require('fs');h.createServer((q,s)=>{s.writeHead(200,{'Content-Type':'text/html;charset=utf-8'});f.createReadStream('index.html').pipe(s)}).listen(8123)"
+```
+
+然后开 `http://localhost:8123`。存档相关的界面直接 `localStorage.setItem` 伪造再刷新即可。
+
 ## 五、已经踩过的坑（别改回去）
 
 | 坑 | 结论 |
@@ -67,6 +78,8 @@ node smoke-test.js index.html
 | **存档必须能降级** | 游戏是双击 `file://` 打开的，部分浏览器在这个协议下禁掉 `localStorage` 并抛异常。`loadSave`/`writeSave` 全程 try 兜底：存不了就当没记录，游戏照常能玩 |
 | **周目倍率两边一起乘** | `ngMul()` 同时进 `scaleHp` 和 `scaleAtk`。只加血不加攻，就是把上面那个「沙包」坑原样复刻一遍 |
 | **三项纪录互不覆盖** | 最快通关取最小、最深处和最多击杀取最大。写在一起会出现「刷了个快通关，把之前的最高击杀冲掉了」 |
+| **`aoe:true` 会吞掉 `ox`** | `applyHit` 是 `cx = h.aoe ? P.x : P.x+P.facing*h.ox`。想让崩山击这类 AoE 打在身前，改 `ox` 完全无效 —— 要给 `P.act` 加 `lunge`，让玩家真的位移过去 |
+| **房间要窄、怪要多** | 曾经 `ROOM_W=1500` 配怪数上限 9（第 6 层就封顶），平均 167px 才一只；又因 72% 从右边缘刷、玩家在 x=140，怪要走一千多像素才够得着 —— 「空且远」。现在 1200 / 上限 12。另外 `SAFE` 推开量必须带抖动，否则一波十来只会叠在同一个点上 |
 
 ## 六、难度调整的原则
 

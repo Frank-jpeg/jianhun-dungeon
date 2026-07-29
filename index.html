@@ -320,7 +320,7 @@
 
 const CW=960, CH=540;
 const FLOOR_TOP=318, FLOOR_BOT=506;   // 可站立的纵深范围
-const ROOM_W=1500;                     // 房间世界宽度
+const ROOM_W=1200;                     // 房间世界宽度（可视 960，所以只横滚 240）
 const GRAV=1500;                       // 敌人重力（低 → 浮空久，方便追击）
 const ROOMS=7;                         // 每层房间数（第 ROOMS 间是 Boss）
 const FLOORS=10;                       // 总层数 —— 打完第 FLOORS 层 Boss 即通关
@@ -970,7 +970,8 @@ function pickKind(){
 function buildWaves(){
   if(roomN===ROOMS) return [[{t:'boss'}]];
   const pool=enemyPool();
-  const base=clamp(4+Math.floor(roomN/2)+(floorN-1), 4, 9);
+  // 上限 9 会让怪数在第 6 层就封顶，摊在房间里显得空。放到 12。
+  const base=clamp(4+Math.floor(roomN/2)+(floorN-1), 4, 12);
   const out=[];
   if(roomKind==='elite'){
     const nEl=floorN>1?3:2;
@@ -1021,11 +1022,12 @@ function spawnWave(){
     let x = fromRight ? ROOM_W-40-ri(0,140) : 40+ri(0,140);
     /* 左侧刷新区是 40..180，而开局玩家就站在 x=140 —— 正好重叠，
        所以进门第一秒常常被贴脸开砍。后续波次同理（玩家可能正站在边上）。
-       统一推开到 SAFE 之外；那一侧贴墙就翻到另一侧。 */
+       统一推开到 SAFE 之外；那一侧贴墙就翻到另一侧。
+       推开量要带抖动，否则一波十来只会全部叠在 P.x±SAFE 这一个点上。 */
     if(Math.abs(x-P.x) < SAFE){
-      const away = x<P.x ? -1 : 1;
-      x = P.x + away*SAFE;
-      if(x<40 || x>ROOM_W-40) x = P.x - away*SAFE;
+      const away = x<P.x ? -1 : 1, push = SAFE + ri(0,90);
+      x = P.x + away*push;
+      if(x<40 || x>ROOM_W-40) x = P.x - away*push;
       x = clamp(x, 40, ROOM_W-40);
     }
     const e=makeEnemy(t, x, rnd(FLOOR_TOP+14, FLOOR_BOT-10), it.el);

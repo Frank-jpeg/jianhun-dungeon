@@ -464,6 +464,13 @@ let runReq=null;
 const lastTap={l:-9, r:-9};
 addEventListener('keydown',e=>{
   const k=KEYMAP[e.code]; if(!k) return; e.preventDefault();
+  /* 触摸模式是单向的：Windows 触屏笔记本上手指碰一下屏幕就打开，
+     之后只能进设置手动关。既然收到了真实按键，说明有键盘，自动退回键鼠模式。 */
+  if(touchMode && !isTouchOnly){
+    touchMode=false; document.body.classList.remove('touch');
+    STICK.on=false; STICK.dx=STICK.dy=0;
+    sHeld.l=sHeld.r=sHeld.u=sHeld.d=false;
+  }
   if(!held[k]){
     hit[k]=true;
     // 双击左右 → 进入奔跑
@@ -488,6 +495,7 @@ let touchMode = (()=>{
   try{ return matchMedia('(pointer:coarse)').matches && !matchMedia('(pointer:fine)').matches; }
   catch(_){ return false; }
 })();
+const isTouchOnly = touchMode;   // 开局就判定为纯触摸设备（真手机）→ 不因键盘事件退出触摸模式
 const sHeld={l:false,r:false,u:false,d:false};      // 摇杆按下状态，与键盘分开存
 const DH=k=>held[k]||sHeld[k];                       // 方向键：键盘或摇杆任一即可
 const STICK={on:false, id:null, bx:152, by:410, dx:0, dy:0, R:66};
@@ -540,6 +548,16 @@ function applyStick(){
 function tStart(e){
   if(!touchMode){                     // 真机第一次触摸 → 自动启用触摸操作
     touchMode=true; document.body.classList.add('touch');
+    /* 顺便抢全屏：手机上限制缩放的是高度，地址栏吃掉的那一条会让整个画面
+       连高带宽一起缩水，左右黑边也跟着变大。touchstart 是合法的用户手势，
+       这里是唯一能自动拿到全屏的时机（全屏按钮藏在暂停菜单里没人找得到）。 */
+    try{
+      const d=document.documentElement;
+      if(!document.fullscreenElement){
+        if(d.requestFullscreen) d.requestFullscreen();
+        else if(d.webkitRequestFullscreen) d.webkitRequestFullscreen();
+      }
+    }catch(_){}
   }
   if(gameState!=='play') return;
   for(let i=0;i<e.changedTouches.length;i++){

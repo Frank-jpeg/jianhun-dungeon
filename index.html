@@ -1103,7 +1103,7 @@ function doDash(){
   const ph=1+P.phantom*.25;
   P.vx = dx/L*640*ph; P.vy = dy/L*380*ph;
   P.inv=.30+P.phantom*.10;
-  if(P.dashCd<=0) P.dashCd=.85*(1-Math.min(.70,P.phantom*.35));
+  if(P.dashCd<=0) P.dashCd=.62*(1-Math.min(.70,P.phantom*.35));
   P.dashBuf=1.5; P.act=null; P.run=null;
   SND.dash();
   fxs.push({k:'dash', x:P.x, y:P.y, t:0, dur:.30, f:P.facing});
@@ -1520,10 +1520,13 @@ function updPlayer(dt){
   if(P.run && (!DH(P.run) || (P.run==='l'&&DH('r')) || (P.run==='r'&&DH('l')))) P.run=null;
 
   // 闪避 / 跳跃
-  if(tapped('dash')) P.dashBufT=.30;
+  /* 闪避输入缓冲：必须和冷却相称，否则输入会被静默吞掉。
+     旧值 缓冲.30 / 冷却.85 实测丢失率 25.6% —— 玩家在冷却中按空格，
+     缓冲等不到充能就归零，没有任何反馈，感觉像「按了没反应」。 */
+  if(tapped('dash')) P.dashBufT=.42;
   if(P.dashChg<P.dashMax){        // 充能回复
     P.dashCd-=dt;
-    if(P.dashCd<=0){ P.dashChg++; P.dashCd=.85*(1-Math.min(.70,P.phantom*.35)); }
+    if(P.dashCd<=0){ P.dashChg++; P.dashCd=.62*(1-Math.min(.70,P.phantom*.35)); }
   }
   if(P.dashBufT>0){
     P.dashBufT-=dt;

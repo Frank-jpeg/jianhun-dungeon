@@ -104,9 +104,3 @@ node -e "const h=require('http'),f=require('fs');h.createServer((q,s)=>{s.writeH
 常量与键位映射 → 卡池 `CARDS`（84 张）→ 职业与技能表 `SKILLS_*` →
 房间生成 `startRoom`/`spawnWave` → 玩家 `updPlayer`/`doDash` →
 伤害结算 `hurtEnemy` → 敌人 AI → 渲染 → HUD `buildSkillBar`/`syncHUD`
-
-## 八、上下文管理
-
-中转站强制 1M 窗口，自动压缩要到 90 万才触发，但链路实测 **35 万就开始
-ECONNRESET、45 万彻底死**。**超过 15 万 tokens 就主动 `/compact`，别等。**
-看绝对 token 数，不要看百分比（35 万在 1M 窗口里只显示 35%）。

@@ -777,7 +777,10 @@ const SKILLS_GUN=[
 const CLASSES={
   sword:{ id:'sword', nm:'鬼剑士', sub:'近战 · 高爆发',
     tip:'贴身输出，靠硬直和浮空把敌人锁死。上手最简单，容错靠血厚。',
-    hp:130, atk:14, spd:215, col:'#4f7fd6', dk:'#2b4a86', accent:'#d8e4ff',
+    /* 血 130 → 150。第 5 层 scaleAtk 是 5.29，盾砸一发就是 103 点，130 的底子
+       等于「两下没了」，而近战没有「不挨打」这个选项。按 CLAUDE.md 的原则，
+       补的是血厚这个既有身份，不是新塞一个隐藏减伤被动 —— 选人界面看得见。 */
+    hp:150, atk:14, spd:215, col:'#4f7fd6', dk:'#2b4a86', accent:'#d8e4ff',
     combo:COMBO_SWORD, aerial:AERIAL_SWORD, skills:SKILLS_SWORD, weapon:'sword' },
   gun:{   id:'gun',   nm:'神枪手', sub:'远程 · 走位风筝',
     tip:'隔着半个屏幕输出，但血少、单发低。被贴脸就很难受，要靠后跳和走位拉开。',
@@ -796,6 +799,11 @@ const ET={
  goblin :{hp: 36,atk: 8,spd: 78,hw:15,hd:12,h:52,col:'#63b85a',dk:'#38712f',nm:'哥布林', poise:1.25},
  charger:{hp: 52,atk:13,spd:104,hw:17,hd:13,h:55,col:'#e05a4f',dk:'#8a2f27',nm:'冲锋兵', poise:1.50},
  archer :{hp: 30,atk:10,spd: 70,hw:14,hd:11,h:50,col:'#a879d8',dk:'#653f8a',nm:'弓手',   poise:1.00},
+ /* 追猎者：全场唯一比玩家快的怪（252 vs 鬼剑士 215 / 神枪手 234）。
+    血薄、韧性低、一碰就碎，但你跑不掉 —— 专门堵「后退就永远安全」的风筝流。
+    它不是墙，是收费站：远程职业必须停下来处理掉它，不能无脑拉开距离。
+    对鬼剑士反而是送上门的补给，这个不对称是故意的。 */
+ hound  :{hp: 26,atk:12,spd:252,hw:15,hd:12,h:44,col:'#7fd48a',dk:'#2f6b3f',nm:'追猎者',poise:0.85},
  shield :{hp:135,atk:17,spd: 54,hw:20,hd:15,h:58,col:'#96a0b0',dk:'#545d6b',nm:'盾卫',   poise:3.20},
  mage   :{hp: 38,atk:14,spd: 56,hw:15,hd:12,h:54,col:'#4fc9d8',dk:'#256f7a',nm:'术士',   poise:1.05},
  bomber :{hp: 28,atk:26,spd:124,hw:16,hd:13,h:46,col:'#e8963c',dk:'#8a5216',nm:'爆弹鬼', poise:1.35},
@@ -1029,10 +1037,12 @@ function scaleAtk(){ return Math.pow(1.42, floorN-1) * (1 + (roomN-1)*.05) * ngM
 function enemyPool(){
   const pool=['goblin','goblin','charger','archer'];
   if(roomN>=2 || floorN>1) pool.push('shield','bat');
-  if(roomN>=3 || floorN>1) pool.push('mage');
+  if(roomN>=3 || floorN>1) pool.push('mage','hound');
   if(roomN>=4 || floorN>1) pool.push('bomber','charger');
   if(roomN>=5 || floorN>1) pool.push('berserk','archer');
   if(floorN>1) pool.push('mage','bomber','bat','berserk');
+  // 追猎者是风筝流的解药，层数越深越该多。第 3 层起每房至少两只的密度。
+  if(floorN>2) pool.push('hound');
   return pool;
 }
 /* 房间类型：普通 / 精英（少而强）/ 围攻（连绵不断） */
@@ -1412,11 +1422,21 @@ function hurtEnemy(e, mul, o){
   if(isBoss && (e.st==='leap'||e.st==='summon'||e.st==='mDair'||e.st==='mSum')) stun = 0;
   if(stun>0){
     stun *= Math.max(.32, 1 - e.stunChain*.17);             // 连续命中递减
-    e.stunAcc += stun;
+    /* 盾卫的背击不攒韧性。代码从第一版就写着「必须绕后」，可绕后只免了 80%
+       伤害、韧性照攒 —— 攒满就是一次贴脸盾砸，近战等于「输出几下必吃一发」，
+       而且很可能正卡在终结斩 .48 秒的后摇里，物理上躲不掉。
+       改成只有正面（blocked）才攒：站对位置就能安全输出，绕后这个设计才落地。 */
+    const backHit = e.type==='shield' && !blocked;
+    if(!backHit) e.stunAcc += stun;
     e.stun = Math.max(e.stun, stun);
     if(!isBoss && e.stunAcc >= e.poiseMax){                 // 韧性被打满 → 反击
       e.stunAcc=0; e.stunChain=0; e.stun=0; e.lean=0;
       e.poiseT=1.15; e.st='chase'; e.t=0; e.dmgDone=false;
+      /* 反击的同时把它推开。「看到金环就该走位」这条提示原本是空话 —— 触发那一刻
+         你就贴在它脸上，盾卫 dist<56 立刻进 .62 秒的盾砸，反应窗口根本不够。
+         推开一段距离，它得自己走回来（盾卫只有 54 的速度），走位才真的来得及。
+         这里绕过 kbMul 是故意的：这不是玩家的击退，是设计好的距离重置。 */
+      e.vx += Math.sign(e.x-P.x||1)*240;
       fxs.push({k:'poise', x:e.x, y:e.y, z:e.z+e.h*.55, t:0, dur:.42});
       SND.poise();
     } else if(!isBoss && e.st!=='chase'){
@@ -2063,6 +2083,18 @@ function updEnemy(e,dt){
     else if(e.t<=0){ e.st='chase'; }
     break;
 
+  /* 追猎者：不做任何花活，就是一路追。速度 252 压过玩家，所以「后退」
+     不再是免费的解。前摇只有 .26 秒，但伤害倍率压到 .85、血 26 —— 你停下来
+     打两下它就死，代价是必须停下来。 */
+  case 'hound':
+    if(e.st==='chase'){ face();
+      if(dist<46 && Math.abs(dy)<22){ e.st='wind'; e.t=.26; SND.ewind(); }
+      else approach();
+    } else if(e.st==='wind'){
+      if(e.t<=0){ eStrike(e,30,30,24,.85); e.st='rec'; e.t=.52; }
+    } else if(e.t<=0){ e.st='chase'; }
+    break;
+
   case 'charger':
     if(e.st==='chase'){ face();
       if(dist<300 && Math.abs(dy)<14){ e.st='wind'; e.t=.50; SND.ewind(); }
@@ -2081,18 +2113,29 @@ function updEnemy(e,dt){
   case 'archer':
     e.shootT-=dt;
     if(e.st==='chase'){ face();
-      if(dist<170) approach(-.85);
+      /* 后退线原本是 170。那是照近战玩家配的，可对远程玩家等于「自动帮你
+         卡在理想射距上」—— 你打得到它、它进不了近战、它自己还不肯开火。
+         收到 120：现在它只在真被贴脸时才退。 */
+      if(dist<120) approach(-.85);
       else if(dist>360) approach(.9);
-      // 子弹只走直线，所以必须先把纵深对齐到玩家这一条线上
+      // 纵深仍然要对齐，只是不用对得那么死了
       else if(Math.abs(dy)>10){ e.y += Math.sign(dy)*sp*.85*dt; e.walk+=dt*8; }
-      if(e.shootT<=0 && dist>140 && dist<440 && Math.abs(dy)<=12){
+      /* 开火条件原本卡 |dy|<=12，而它对齐纵深的速度只有 59.5 px/s、玩家有 234
+         —— 一个持续走位的远程玩家能让它永远等不到这个条件，等于完全免疫。
+         放宽到 40，配合下面带纵深分量的箭。 */
+      if(e.shootT<=0 && dist>140 && dist<440 && Math.abs(dy)<=40){
         e.st='wind'; e.t=.55; e.aimY=e.y; SND.ewind();
       }
     } else if(e.st==='wind'){
       if(e.t<=0){
-        // 沿 X 轴平射，不带纵深分量 —— 玩家上下走一步就能躲开
+        /* 箭带一个指向玩家「当前」位置的纵深分量 —— 只瞄现在，不做预判。
+           所以「站着不动」不再自动免疫，但只要在飞行途中动一步就还是躲得开：
+           「箭走直线、可以躲」这条手感保住了，免费的免疫没了。
+           vy 夹在 ±160，再快就变成追踪弹、躲不掉了。 */
+        const flight = Math.max(.15, Math.abs(P.x-e.x)/430);
         projs.push({own:'e',k:'arrow',x:e.x+e.facing*18,y:e.y,z:30,
-          vx:e.facing*430, vy:0, dmg:e.atk, life:2.4, hitSet:new Set()});
+          vx:e.facing*430, vy:clamp((P.y-e.y)/flight,-160,160),
+          dmg:e.atk, life:2.4, hitSet:new Set()});
         SND.eshoot();
         e.st='rec'; e.t=.35; e.shootT=rnd(2.0,2.9);
       }
@@ -2201,7 +2244,7 @@ function updEnemy(e,dt){
       }
       if(e.t<=0){ e.st='rec'; e.t=.75; }
     } else if(e.st==='wind'){
-      if(e.t<=0){ eStrike(e,44,58,36,1.35); cam.shake=Math.max(cam.shake,9); e.st='rec'; e.t=.72; }
+      if(e.t<=0){ eStrike(e,44,58,36,1.15); cam.shake=Math.max(cam.shake,9); e.st='rec'; e.t=.72; }
     } else if(e.t<=0){ e.st='chase'; }
     break;
   }

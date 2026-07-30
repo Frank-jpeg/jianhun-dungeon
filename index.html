@@ -722,7 +722,7 @@ const AERIAL_SWORD={dur:.34,at:.09,mul:1.70,kb:110,up:-300,hs:.075,st:.42,
                     ox:44,hw:48,hd:50,zt:420,fx:'sl3',nm:'空中斩'};
 const SKILLS_SWORD=[
  {key:'Z',nm:'上挑',  cd:2.0, ds:'向上斩击，将前方敌人<b>击飞浮空</b>。浮空的敌人无法行动，是起手技'},
- {key:'S',nm:'怒气爆发',cd:7.0, ds:'<b>瞬发</b>，以自身为中心爆开，把周围敌人<b>全部击飞</b>并短暂无敌。被围住时用来脱困'},
+ {key:'S',nm:'怒气爆发',cd:7.0, ds:'<b>瞬发</b>，原地向周围爆发怒气，<b>8 段</b>连续伤害把圈内敌人<b>不断向上掀飞</b>。浮空的敌人无法行动，被围住时用来脱困'},
  {key:'D',nm:'崩山击',cd:12 , ds:'<b>向前跃起</b>重砸地面，<b>大范围</b>击飞所有敌人。清场和救命用'},
  {key:'F',nm:'波动剑',cd:8.0, ds:'发射<b>穿透剑气</b>，可以隔着一群怪打后排的弓手'},
 ];
@@ -825,7 +825,7 @@ const CARDS=[
  {id:'k0',   tag:'技能',max:1,nm:()=>SKILLS[0].nm+' · 强化',
   ds:()=>P.cls==='gun'?`<i>浮空弹</i>伤害 +48%，浮空更高`:`<i>上挑</i>范围 +60%，浮空更高，伤害 +50%`, ap:p=>p.sk[0]=1},
  {id:'k1',   tag:'技能',max:1,nm:()=>SKILLS[1].nm+' · 强化',
-  ds:()=>P.cls==='gun'?`<i>后跳散弹</i>由五发变为<i>七发</i>`:`<i>怒气爆发</i>范围 +34%，伤害 +40%，无敌时间更长`, ap:p=>p.sk[1]=1},
+  ds:()=>P.cls==='gun'?`<i>后跳散弹</i>由五发变为<i>七发</i>`:`<i>怒气爆发</i>由 <i>8 段</i>增加到 <i>10 段</i>，范围 +25%，无敌时间更长`, ap:p=>p.sk[1]=1},
  {id:'k2',   tag:'技能',max:1,nm:()=>SKILLS[2].nm+' · 强化',
   ds:()=>P.cls==='gun'?`<i>银光落刃</i>由八发变为<i>十一发</i>，覆盖面更广`:`<i>崩山击</i>落地追加左右冲击波，范围 +45%`, ap:p=>p.sk[2]=1},
  {id:'k3',   tag:'技能',max:1,nm:()=>SKILLS[3].nm+' · 强化',
@@ -1178,14 +1178,25 @@ function castSword(i,up){
     P.act={kind:'sk',id:0,t:0,dur:.42,hits:[{at:.12,ox:56,
       hw:(up?70:44)*(1+P.range*.4), hd:(up?88:56)*(1+P.range*.4), zt:175,
       mul:up?2.4:1.6, kb:50, up:up?520:430, hs:.075, st:.38, fx:'rise', done:false}]};
-  } else if(i===1){ // 怒气爆发：瞬发、原地爆开，专门用来从怪堆里脱身
-    /* 和崩山击的分工全靠节奏：那边 at:.63 慢、有承诺、伤害 4.0 是清场技；
-       这边 at:.06 几乎立刻生效、伤害只有 1.6，换来的是无敌帧和「马上就能走」。
-       击退照常走 hurtEnemy 的韧性系统，霸体的怪推不动。 */
-    P.inv=Math.max(P.inv, up?.45:.30);
-    P.act={kind:'sk',id:1,t:0,dur:.46,hits:[{at:.06,ox:0,
-      hw:(up?150:112), hd:(up?107:80), zt:250, mul:up?2.24:1.60,
-      kb:300, up:150, hs:.10, st:.55, fx:'burst', aoe:true, shake:16, done:false}]};
+  } else if(i===1){ // 怒气爆发：瞬发，原地爆开，多段强制浮空
+    /* 照 DNF 原版：瞬发近战范围技能，固定 8 段（学 TP 后 10 段），
+       命中产生强制浮空、圈内敌人被不断向上掀动，角色保持原地站姿无位移。
+       几个数字的理由：
+       - kb 压到 40：DNF 是往上掀不是往外推，推远了后面几段就打空了
+       - 浮空必须前置：GRAV=1500，每段间隔 .055 秒重力就吃掉 82，而贴地时
+         `e.vz=0` 会清零攒下的动量。所以第一段给 600（= 120px 高，约为上挑
+         62px 的两倍，这才叫「挺高」），后续每段 130 只负责把人不断往上顶、
+         维持滞空，对应原版「圈内敌人被不断向上掀动」
+       - st 只有 .12：8 段累计才 .55，不至于自己把敌人韧性打满进霸体，
+         否则前两段掀起来、后面全打在霸体上，白瞎
+       浮空同样走 hurtEnemy 的 kbMul，霸体的怪掀不动 —— 不会变成永久空中锁。 */
+    const n = up?10:8;
+    const ts = Array.from({length:n}, (_,k)=>.04+k*.055);
+    P.inv = Math.max(P.inv, up?.45:.30);
+    P.act={kind:'sk',id:1,t:0,dur:.04+n*.055+.20,
+      hits:ts.map((at,k)=>({at, ox:0, hw:(up?140:112), hd:(up?100:80), zt:250,
+        mul:.42, kb:40, up:k===0?600:130, hs:k===n-1?.09:.02, st:.12, quiet:k>0,
+        fx:k===0?'burst':'burstTick', aoe:true, shake:k===0?16:5, done:false}))};
   } else if(i===2){ // 崩山击（起跳高度按玩家重力换算，保证 0.63 秒落地对上命中帧）
     P.vz=850; SND.jump();
     // 滞空段带位移，落点在身前 —— 读起来是「跃过去砸」而不是原地起跳
@@ -1278,7 +1289,7 @@ function hurtEnemy(e, mul, o){
   if(isBoss && (e.st==='leap'||e.st==='summon')) stun = 0;
   if(stun>0){
     stun *= Math.max(.32, 1 - e.stunChain*.17);             // 连续命中递减
-    e.stunChain++; e.stunAcc += stun; e.chainT=1.0;
+    e.stunAcc += stun;
     e.stun = Math.max(e.stun, stun);
     if(!isBoss && e.stunAcc >= e.poiseMax){                 // 韧性被打满 → 反击
       e.stunAcc=0; e.stunChain=0; e.stun=0; e.lean=0;
@@ -1289,6 +1300,11 @@ function hurtEnemy(e, mul, o){
       if(e.st!=='rush' || stun>=.35){ e.st='chase'; e.t=0; e.dmgDone=false; }
     }
   }
+  /* 连击计数要独立于硬直递增，否则「不吃硬直」的怪就等于「击退浮空不衰减」。
+     盾卫轻击时 stun 被清成 0，原本连 stunChain 都不涨 —— 实测一个 8 段技能
+     能把它掀到 476px、锁在空中 1.7 秒，而哥布林只有 191px：全场最重、
+     常驻霸体的怪飞得最高，正好反了。chainT 也要一起续，不然下一帧就被复位。 */
+  e.stunChain++; e.chainT=1.0;
   // 受击后仰
   const ld = o.aoe ? (Math.sign(e.x-P.x)||1) : P.facing;
   e.lean = ld * Math.min(.42, .16 + stun*.5);
@@ -1296,10 +1312,12 @@ function hurtEnemy(e, mul, o){
   nums.push({x:e.x+rnd(-8,8), y:e.y, z:e.z+e.h*.7, v:dmg, t:0,
     crit, blocked, c: blocked?'#9fb2c9' : crit?'#ffd34d':'#fff2d8'});
 
-  // 音效
-  if(blocked) SND.block();
-  else if(stun>=.35 || mul>=1.8) SND.heavy();
-  else SND.hit();
+  // 音效（多段技能的后续段落静音 —— 8 段 × 十来只怪会把声道糊成一片噪音）
+  if(!o.quiet){
+    if(blocked) SND.block();
+    else if(stun>=.35 || mul>=1.8) SND.heavy();
+    else SND.hit();
+  }
   if(crit && !blocked) SND.crit();
 
   // 状态附加（只有平A / 弹丸 会挂，技能不挂，避免叠太快）
@@ -1354,11 +1372,13 @@ function hurtEnemy(e, mul, o){
   }
   // 击退 / 浮空
   const dir = o.dir!=null ? o.dir : (o.aoe ? (Math.sign(e.x-P.x)||1) : P.facing);
-  /* 击退也要走韧性：霸体中完全免疫，连续命中逐次递减。
-     否则敌人打满韧性「恢复行动」后，仍被一下下推开，永远够不到玩家 —— 躺赢的根源。 */
+  /* 击退和浮空都要走韧性：霸体中完全免疫，连续命中逐次递减。
+     否则敌人打满韧性「恢复行动」后，仍被一下下推开，永远够不到玩家 —— 躺赢的根源。
+     浮空尤其不能漏：浮空的敌人无法行动，多段技能若每段都无条件上掀，
+     一个技能就能把全场永久挂在空中，比单纯推开更彻底。 */
   const kbMul = e.poiseT>0 ? 0 : Math.max(.35, 1 - e.stunChain*.15);
   e.vx += dir*(o.kb||0)*kbMul*(e.type==='boss'?.12:1);
-  if(o.up) e.vz += o.up*(e.type==='boss'?.15:1);
+  if(o.up) e.vz += o.up*kbMul*(e.type==='boss'?.15:1);
 
   particles(e.x, e.y, e.z+e.h*.6, crit?12:6, crit?'#ffd34d':'#ffffff');
   return dmg;
@@ -1544,7 +1564,7 @@ function applyHit(h){
     if(e.z > h.zt) continue;
     if(!h.aoe && Math.sign(e.x-P.x)!==P.facing && Math.abs(e.x-P.x)>10) continue;
     hurtEnemy(e, h.mul, {basic:h.basic, kb:h.kb, up:h.up, aoe:h.aoe, st:h.st,
-                         step:P.act?P.act.step:0});
+                         quiet:h.quiet, step:P.act?P.act.step:0});
     any=true;
     // 追命：立刻追加一次
     if(h.basic && P.follow>0 && Math.random()<P.follow){
@@ -1556,7 +1576,7 @@ function applyHit(h){
   if(any){
     hitstop=Math.max(hitstop, h.hs||.04);
     cam.shake=Math.max(cam.shake, h.shake || (h.hs>.08?14:5));
-  } else SND.swing();
+  } else if(!h.quiet) SND.swing();
   // 视觉
   const fx=h.fx||'sl1';
   if(fx==='quake'){
@@ -1567,10 +1587,15 @@ function applyHit(h){
         vx:d*520, vy:0, mul:1.6, life:.85, pierce:true, hitSet:new Set()});
     }
   } else if(fx==='burst'){
-    // 双环外扩，红橙色 —— 跟崩山击那圈金色震波区分开
-    fxs.push({k:'ring', x:P.x, y:P.y, t:0, dur:.34, r:h.hw*1.15, c:'#ff7a4a'});
-    fxs.push({k:'ring', x:P.x, y:P.y, t:0, dur:.50, r:h.hw*1.55, c:'#ffd06a'});
-    flash=Math.max(flash,.30); SND.boom();
+    /* 照 DNF 原版的画面：地面浮现一圈猩红血气圆环，数道粗壮赤红血柱
+       接连从脚下环形区域向上冲起，血色冲击波层层扩散。 */
+    fxs.push({k:'ring', x:P.x, y:P.y, t:0, dur:.42, r:h.hw*1.10, c:'#e8243c'});
+    fxs.push({k:'gush', x:P.x, y:P.y, t:0, dur:.46, r:h.hw*.60, h:158, n:9,  w:11, c:'#d81f38'});
+    fxs.push({k:'gush', x:P.x, y:P.y, t:0, dur:.56, r:h.hw*.95, h:116, n:11, w:8, sd:.29, c:'#ff5a42'});
+    flash=Math.max(flash,.30); SND.boom(); SND.poise();
+  } else if(fx==='burstTick'){
+    // 后续每一段补一圈脉冲，堆起来就是「层层扩散」。音效在 hurtEnemy 里已静音
+    fxs.push({k:'ring', x:P.x, y:P.y, t:0, dur:.24, r:h.hw*.88, c:'#ff4632'});
   } else if(fx==='spin'){
     fxs.push({k:'spin', x:P.x, y:P.y, t:0, dur:.30, r:h.hw});
   } else {
@@ -2647,6 +2672,18 @@ function drawFx(f){
     ctx.beginPath(); ctx.ellipse(sx,sy,f.r*(.25+k*.9),f.r*.4*(.25+k*.9),0,0,7); ctx.stroke();
     ctx.globalAlpha=a*.35; ctx.strokeStyle='#fff'; ctx.lineWidth=3;
     ctx.beginPath(); ctx.ellipse(sx,sy,f.r*(.15+k*.75),f.r*.4*(.15+k*.75),0,0,7); ctx.stroke();
+  } else if(f.k==='gush'){
+    /* 怒气爆发的血柱：沿脚下那圈椭圆布若干根，随 k 向上抽长再淡出。
+       画成竖长椭圆而不是矩形，边缘柔和，跟 lighter 混合模式配得上。 */
+    const rise=k*(f.h||140), n=f.n||9, w=(f.w||10)*(1-k*.42);
+    ctx.globalAlpha=a*.80; ctx.fillStyle=f.c||'#e8243c';
+    for(let i=0;i<n;i++){
+      const ang=(i/n)*Math.PI*2+(f.sd||0);
+      const gx=sx+Math.cos(ang)*f.r, gy=sy+Math.sin(ang)*f.r*.40;
+      ctx.beginPath();
+      ctx.ellipse(gx, gy-rise*.5, w, rise*.5+7, 0, 0, 7);
+      ctx.fill();
+    }
   } else if(f.k==='boom'){
     ctx.globalAlpha=a*.8; ctx.fillStyle='#ffa34a';
     ctx.beginPath(); ctx.arc(sx,sy,f.r*(.3+k*.85),0,7); ctx.fill();

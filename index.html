@@ -357,14 +357,32 @@ const SAVE=loadSave();
 const fmtTime=t=>`${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
 const GRAV=1500;                       // 敌人重力（低 → 浮空久，方便追击）
 const ROOMS=7;                         // 每层房间数（第 ROOMS 间是 Boss）
-const FLOORS=10;                       // 总层数 —— 打完第 FLOORS 层 Boss 即通关
+/* 总层数 —— 打完第 FLOORS 层 Boss 即通关。总房间数 = FLOORS × ROOMS。
+   曾经是 10（70 间），一局要打 69 次三选一，中段全是重复的巨魔王，玩家反馈
+   「太多、太无聊」。砍到 5（35 间）。ROOMS 故意不动 —— 精英位（第 ROOMS-3
+   间）、Boss 位（第 ROOMS 间）、刷怪池按 roomN 的解锁节奏全部原样保留。
+   改这个数必须同时重调下面三处，否则整条曲线会塌：
+     ① scaleHp/scaleAtk 的底数（层数少了，每层要涨得更多）
+     ② buildWaves 里的怪数递增（原式在 5 层顶不到上限 12）
+     ③ MIRROR_HP_MUL（玩家拿到的卡少了一半） */
+const FLOORS=5;
 /* 虚影关（第 FLOORS 层 Boss 之后的额外关，对手是玩家自己的复制）。
    FLOORS 故意不动：通关判定停在巨魔王，虚影是通关之后的额外挑战。
    这三个数是整场架的全部手感来源，改这里就够，别去改 makeMirror 里的算式。
-   注意它们依赖玩家的 build 强度 —— 卡池或房间数一变，这三个数就要重调。 */
-const MIRROR_HP_MUL =8;                // 血量 = 玩家生命上限 × 这个数
+   注意它们依赖玩家的 build 强度 —— 卡池或房间数一变，这三个数就要重调。
+   70 间 → 35 间那次，血量倍率从 8 降到 6：虚影的血是玩家生命上限的倍数，
+   而玩家的 DPS 比生命上限涨得快，卡少一半后 ×8 会把这一架拖成消耗战。 */
+const MIRROR_HP_MUL =6;                // 血量 = 玩家生命上限 × 这个数
 const MIRROR_DMG_MUL=.5;               // 伤害 = 玩家平A 基准 × 这个数
 const MIRROR_CD_MUL =1.0;              // 出招间隔倍率（>1 更慢）
+/* 老存档迁移：FLOORS 从 10 降到 5 之后，旧纪录里的最深处可能是「9-3」，
+   在只有 5 层的游戏里既显示成「最深 9-3 / 共 5 层」，又永远打不破。
+   夹到 FLOORS 为止。这段不能写进 loadSave —— 它在 FLOORS 定义之前就跑了。 */
+for(const k in SAVE.best){
+  const b=SAVE.best[k];
+  if(b && b.floor>FLOORS){ b.floor=FLOORS; b.room=ROOMS; }
+}
+writeSave();
 const PGRAV=2700;                      // 玩家重力（高 → 跳跃干脆不飘）
 const JUMP_V=750;                      // 跳跃初速：顶点约 104，滞空 0.56 秒
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
@@ -928,8 +946,8 @@ let floorN, roomN, kills, waves, waveIdx, roomAffix, nextAffix, cleared, roomKin
 let cam, hitstop, flash, gameState='title', boss=null, runStart=0;
 let ngLevel=1, ngPick=Math.max(1, SAVE.ngMax|0);   // 本局周目 / 标题页当前选中的周目
 /* 虚影关的状态。用两个布尔量表达「第 FLOORS 层之后还有一间」，而不是把 FLOORS
-   改成 11 —— 那会连带动到 scaleHp/scaleAtk 的指数、存档的 b.floor 和 HUD 的
-   「x / 10」，而通关判定按设计就该停在巨魔王。 */
+   加 1 —— 那会连带动到 scaleHp/scaleAtk 的指数、存档的 b.floor 和 HUD 的
+   「x / FLOORS」，而通关判定按设计就该停在巨魔王。 */
 let mirrorPending=false;   // 已打完巨魔王，下一间是虚影关
 let mirrorRoom=false;      // 正在打虚影
 let winInfo=null;          // recordWin() 的结果，留给最终结算显示
@@ -994,10 +1012,18 @@ function resetRun(cls){
    ========================================================================= */
 /* 血量指数必须贴着攻击指数走。原本 1.62 / 1.34，第 10 层是 ×77 血 / ×14 攻，
    敌人变成「打不死也打不疼」的沙包 —— 最无聊的一种组合。现在拉回 1.8 倍差。
-   周目倍率同样两边一起乘，别只加血。 */
+   周目倍率同样两边一起乘，别只加血。
+
+   FLOORS 10 → 5 时底数从 1.42 / 1.31 抬到 1.55 / 1.42：只有 4 段涨幅了，
+   照原底数最终 Boss 只有 ×6.5 血，整局像打到一半就结束。抬完是 ×9.2 血 /
+   ×5.3 攻，仍远低于原来第 10 层的 ×42.6 —— 玩家的卡也从 ~69 张掉到 ~34 张，
+   峰值本来就该跟着降，不能按原峰值配。
+   顺带把血/攻差距从 3.1 倍收到 1.75 倍：绝对值降了，就靠敌人更疼来补压力，
+   这比堆血更符合「加压从敌人侧来、别削玩家防御手段」。
+   第 1 层指数是 0，所以开局手感和改之前完全一致。 */
 function ngMul(){ return 1 + (ngLevel-1)*.28; }
-function scaleHp(){ return Math.pow(1.42, floorN-1) * (1 + (roomN-1)*.10) * ngMul(); }
-function scaleAtk(){ return Math.pow(1.31, floorN-1) * (1 + (roomN-1)*.05) * ngMul(); }
+function scaleHp(){ return Math.pow(1.55, floorN-1) * (1 + (roomN-1)*.10) * ngMul(); }
+function scaleAtk(){ return Math.pow(1.42, floorN-1) * (1 + (roomN-1)*.05) * ngMul(); }
 
 /* 兵种按进度解锁，早期不会一上来就被夹 */
 function enemyPool(){
@@ -1022,8 +1048,11 @@ function pickKind(){
 function buildWaves(){
   if(roomN===ROOMS) return [[{t:'boss'}]];
   const pool=enemyPool();
-  // 上限 9 会让怪数在第 6 层就封顶，摊在房间里显得空。放到 12。
-  const base=clamp(4+Math.floor(roomN/2)+(floorN-1), 4, 12);
+  /* 上限 9 会让怪数在第 6 层就封顶，摊在房间里显得空。放到 12。
+     层数砍到 5 之后 (floorN-1) 最多只加 4，峰值 11 —— 上限永远够不到。
+     改成 ×2：第 1 层照旧（加 0），第 4 层起满编 12。「房间要窄、怪要多」
+     这条已经验证过，12 是验证过的天花板，别为了配层数去动它。 */
+  const base=clamp(4+Math.floor(roomN/2)+(floorN-1)*2, 4, 12);
   const out=[];
   if(roomKind==='elite'){
     const nEl=floorN>1?3:2;

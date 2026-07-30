@@ -358,6 +358,13 @@ const fmtTime=t=>`${Math.floor(t/60)}:${String(t%60).padStart(2,'0')}`;
 const GRAV=1500;                       // 敌人重力（低 → 浮空久，方便追击）
 const ROOMS=7;                         // 每层房间数（第 ROOMS 间是 Boss）
 const FLOORS=10;                       // 总层数 —— 打完第 FLOORS 层 Boss 即通关
+/* 虚影关（第 FLOORS 层 Boss 之后的额外关，对手是玩家自己的复制）。
+   FLOORS 故意不动：通关判定停在巨魔王，虚影是通关之后的额外挑战。
+   这三个数是整场架的全部手感来源，改这里就够，别去改 makeMirror 里的算式。
+   注意它们依赖玩家的 build 强度 —— 卡池或房间数一变，这三个数就要重调。 */
+const MIRROR_HP_MUL =8;                // 血量 = 玩家生命上限 × 这个数
+const MIRROR_DMG_MUL=.5;               // 伤害 = 玩家平A 基准 × 这个数
+const MIRROR_CD_MUL =1.0;              // 出招间隔倍率（>1 更慢）
 const PGRAV=2700;                      // 玩家重力（高 → 跳跃干脆不飘）
 const JUMP_V=750;                      // 跳跃初速：顶点约 104，滞空 0.56 秒
 const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
@@ -920,6 +927,12 @@ let P, enemies, projs, fxs, parts, nums, orbs;
 let floorN, roomN, kills, waves, waveIdx, roomAffix, nextAffix, cleared, roomKind, siegeT;
 let cam, hitstop, flash, gameState='title', boss=null, runStart=0;
 let ngLevel=1, ngPick=Math.max(1, SAVE.ngMax|0);   // 本局周目 / 标题页当前选中的周目
+/* 虚影关的状态。用两个布尔量表达「第 FLOORS 层之后还有一间」，而不是把 FLOORS
+   改成 11 —— 那会连带动到 scaleHp/scaleAtk 的指数、存档的 b.floor 和 HUD 的
+   「x / 10」，而通关判定按设计就该停在巨魔王。 */
+let mirrorPending=false;   // 已打完巨魔王，下一间是虚影关
+let mirrorRoom=false;      // 正在打虚影
+let winInfo=null;          // recordWin() 的结果，留给最终结算显示
 const taken={};
 
 function newPlayer(cls){
@@ -967,6 +980,7 @@ function resetRun(cls){
   applyClass(cls||'sword');
   P=newPlayer(cls||'sword'); enemies=[]; projs=[]; fxs=[]; parts=[]; nums=[]; orbs=[];
   floorN=1; roomN=1; kills=0; boss=null;
+  mirrorPending=false; mirrorRoom=false; winInfo=null;
   ngLevel=clamp(ngPick|0, 1, Math.max(1, SAVE.ngMax|0));   // 只认已解锁的周目
   for(const k in taken) delete taken[k];
   cam={x:0, shake:0, ox:0, oy:0};
@@ -1037,19 +1051,29 @@ function buildWaves(){
 }
 
 function startRoom(){
-  roomKind=pickKind(); siegeT=0;
-  waves=buildWaves(); waveIdx=0; cleared=false;
-  roomAffix = nextAffix;
+  /* 虚影关：没有波次、没有词条、进门回满血，场上只有一个虚影。
+     waves 留空是有意的 —— 清屋判定里 waveIdx(0) < waves.length-1(-1) 为假，
+     于是虚影一倒下就直接走 roomClear。 */
+  const mir=mirrorPending;
+  mirrorPending=false; mirrorRoom=mir;
+  roomKind = mir ? 'mirror' : pickKind(); siegeT=0;
+  waves = mir ? [] : buildWaves(); waveIdx=0; cleared=false;
+  roomAffix = mir ? null : nextAffix;
   // 预告下一间的词条
-  nextAffix = (floorN===1 && roomN<2) ? null : pick(AFFIX);
+  nextAffix = mir ? null : ((floorN===1 && roomN<2) ? null : pick(AFFIX));
   P.x=140; P.y=440; P.z=0; P.vx=0; P.vz=0; P.act=null; P.combo=0; P.run=null;
   P.crownN=0; P.dashChg=P.dashMax;    // 弹幕皇冠每间重置；冲刺充能补满
   P.cds=[0,0,0,0];                    // 技能冷却每间重置 —— 进门站着等 CD 是纯等待时间
   cam.x=0;
   boss=null; orbs=[]; projs=[];
-  spawnWave();
-  SND.intense(roomN===ROOMS?1:0);
-  if(roomN===ROOMS) SND.boss();
+  if(mir){
+    enemies=[];                       // 保证场上只有虚影（残留的分裂小鬼之类清干净）
+    P.hp=P.maxHp;                     // 最终决战：回满血
+    enemies.push(makeMirror());
+    flash=Math.max(flash,.45); cam.shake=16;
+  } else spawnWave();
+  SND.intense((mir||roomN===ROOMS)?1:0);
+  if(mir||roomN===ROOMS) SND.boss();
   syncHUD();
 }
 
@@ -1107,6 +1131,60 @@ function makeEnemy(type,x,y,elite){
   if(type==='bat'){ e.hoverZ=rnd(64,92); e.seed=rnd(0,6.3); e.diveT=rnd(.8,2.2); }
   if(type==='bomber'){ e.fuseMax=4.5; }
   if(type==='boss'){ boss=e; document.getElementById('bossNm').textContent=d.nm; }
+  return e;
+}
+
+/* ---------------------------------------------------------------------------
+   虚影 —— 玩家自己的复制，第 FLOORS 层 Boss 之后的额外关。
+   属性全部从 P 现算，所以「带增益」是自动的：你越强它越强。
+
+   type 必须是 'boss'。hurtEnemy 里十几处 boss 豁免（硬直上限、免魅惑、免冻结、
+   击退 ×.12、浮空 ×.15）虚影全都要继承 —— 否则怒气爆发那 8 段会把它永久锁在
+   空中，一秒都还不了手，直接退化成站桩沙包。行为上靠 e.mirror 分流，别为了
+   「更清晰」把它改成独立的 type。
+
+   带不了的两类增益：① 元素状态（燃烧/冰霜/流血/中毒）—— 玩家身上没有状态系统，
+   hurtPlayer 只算减伤和扣血；② 纯触发类（连杀回血、击杀爆炸）—— 场上只有虚影
+   一个，永远触发不了。
+   --------------------------------------------------------------------------- */
+function makeMirror(){
+  const e=makeEnemy('boss', clamp(P.x+560, 240, ROOM_W-120), 440);
+  e.mirror=true; e.affix=null; e.elite=false;
+  e.spawnT=1.15;                              // 从紫雾里站起来的时间
+
+  // 外观：玩家的体型，不是巨魔王的
+  e.hw=20; e.hd=15; e.h=56;
+  e.col='#8f6ad8'; e.dk='#43276e';
+  e.nm='虚影 · '+CLS.nm;
+  document.getElementById('bossNm').textContent=e.nm;
+
+  // ---- 强度：三个倍率在文件开头，调手感只动那三个 ----
+  e.maxHp=Math.max(1, Math.round(P.maxHp*MIRROR_HP_MUL));
+  e.hp=e.maxHp;
+  e.atk=Math.max(1, P.baseAtk*P.atkMul*P.basicMul*MIRROR_DMG_MUL);
+
+  /* 移速压到玩家的 .92。等速的话神枪手会彻底没法风筝 —— 拉开距离是那个职业
+     唯一的防御手段，抹掉它这一关就只剩硬拼。 */
+  e.spd=Math.max(40, P.moveBase*P.moveMul*.92);
+
+  // ---- 继承的增益 ----
+  e.mcls  = P.cls;
+  e.msk   = P.sk.slice();                     // 四个技能各自的强化卡
+  e.maspd = clamp(P.aspd, .5, 3);             // 攻速 → 起手时间按比例缩短
+  e.mcombo= clamp(P.comboMax|0, 1, 5);        // 连招段数
+  e.mcds  = [0,0,0,0];
+  e.mcdMul= (1-Math.min(P.cdr,.6))*MIRROR_CD_MUL;
+  e.mward = clamp(P.wardMax|0, 0, 3);         // 守护结界：完全抵挡前 N 次命中
+  e.mregen= P.regen||0;                       // 再生：脱战 3 秒后回血
+  e.mthorns=P.thorns||0;                      // 荆棘之甲：被打时反弹
+  e.morbit= clamp(P.orbitN|0, 0, 3);          // 剑舞领域：环绕伤害
+  e.morbA = 0;
+  e.mminion=clamp(P.minionN|0, 0, 2);         // 战魂 → 召唤同数量的小鬼
+  e.mstep = 0;                                // 连招进行到第几段
+  e.mtick = 0;                                // 多段技能进行到第几段
+  e.mnoHit= 0;                                // 多久没挨打了（喂 mregen）
+  e.mOrbCd= 0;                                // 剑舞领域的命中间隔
+  e.mSumCd= 8;                                // 召唤冷却（开场不立刻召）
   return e;
 }
 
@@ -1274,9 +1352,25 @@ function hurtEnemy(e, mul, o){
   if(e.type==='shield' && !o.aoe && guardUp && e.facing === -inc){ dmg*=.20; blocked=true; }
   // 词条护盾
   if(e.affix==='shield' && !e.shieldUsed){ dmg*=.20; e.shieldUsed=true; blocked=true; }
+  /* 虚影的守护结界：继承玩家的 wardMax，和玩家那份一样是「完全抵挡一次」而不是减伤。
+     noChain 的命中（战魂、剑舞领域）不消耗层数 —— 剑舞每 .6 秒一跳，
+     否则三层盾开场就被磨光，等于没有。 */
+  if(e.mirror && e.mward>0 && !o.noChain){
+    e.mward--; e.mnoHit=0;
+    fxs.push({k:'poise',x:e.x,y:e.y,z:e.z+e.h*.55,t:0,dur:.42});
+    SND.block();
+    return;
+  }
 
   dmg=Math.max(1, Math.round(dmg));
   e.hp -= dmg; e.flashT=.10;
+  if(e.mirror){
+    e.mnoHit=0;                                    // 打断再生
+    /* 荆棘之甲：继承玩家的 thorns。反弹频率由 hurtPlayer 的无敌帧兜住
+       （挨一下有 .62 秒无敌），所以不会被虚影的连招连成秒杀。 */
+    if(e.mthorns>0 && !o.noChain && Math.hypot(P.x-e.x,(P.y-e.y)*1.6)<130)
+      hurtPlayer(e.mthorns*MIRROR_DMG_MUL, e.x);
+  }
 
   /* ---- 硬直 + 韧性 ----
      连续挨打时硬直逐次递减，累计量打满 poiseMax 就强制进入「霸体反击」：
@@ -1286,7 +1380,7 @@ function hurtEnemy(e, mul, o){
   if(e.poiseT>0) stun = 0;                                  // 霸体中：照样掉血，但不僵直
   if(e.type==='shield' && stun<.34) stun = 0;               // 盾卫常驻霸体：轻击完全不打断它
   if(isBoss) stun = Math.min(stun*.28, .16);
-  if(isBoss && (e.st==='leap'||e.st==='summon')) stun = 0;
+  if(isBoss && (e.st==='leap'||e.st==='summon'||e.st==='mDair'||e.st==='mSum')) stun = 0;
   if(stun>0){
     stun *= Math.max(.32, 1 - e.stunChain*.17);             // 连续命中递减
     e.stunAcc += stun;
@@ -1696,7 +1790,14 @@ function updPlayer(dt){
   // 起跳后立刻按 X 应该出空中斩，所以这里要重算
   const airborne = P.z>.5 || P.vz>0;
 
-  // 技能（同样需要缓冲 —— 奔跑/连招中按下不能被吃掉）
+  /* 技能输入：缓冲 + 长按重试。
+     缓冲是为了奔跑 / 连招中按下不被吃掉；长按重试是因为 tapped() 只在按下的
+     那一帧为真 —— 只认边沿的话，「按下时正好在冷却里、在空中、或者卡在后摇
+     超过 0.45 秒」这一下就被永久丢掉，按着不放也不会再试第二次。
+     实测：按住上挑 3.2 秒（CD 只有 2 秒）只出 1 次，而按住 X 两秒平A 连 7 次
+     —— 平A 一直是 (hit.atk || held.atk) 的电平触发，技能这边不一致才像 bug。
+     tap 优先于 hold：按住 S 的同时点 D，应该出 D，不能被按住的 S 盖回去。 */
+  for(let i=0;i<4;i++) if(held['s'+i] && !P.skBuf && P.cds[i]<=0) P.skBuf={i, t:.45};
   for(let i=0;i<4;i++) if(tapped('s'+i)) P.skBuf={i, t:.45};
   if(P.skBuf){
     P.skBuf.t-=dt;
@@ -1870,6 +1971,7 @@ function updEnemy(e,dt){
     }
   }
   if(e.affix==='regen') e.hp=Math.min(e.maxHp, e.hp+e.maxHp*.015*dt);
+  if(e.mirror) mirrorPassive(e,dt);          // 虚影的再生 / 剑舞领域
 
   // 物理
   e.x+=e.vx*dt; e.y+=e.vy*dt;
@@ -1896,11 +1998,12 @@ function updEnemy(e,dt){
 
   if(e.hp<=0){ killEnemy(e); return; }
   if(e.stun>0 || e.frozenT>0) return;                     // 硬直 / 冻结中完全无法行动
-  // 浮空中也无法行动 —— 但 Boss 跳砸需要在空中追踪玩家
-  if(e.z>2 && e.type!=='bat' && !(e.type==='boss' && e.st==='leap')) return;
+  // 浮空中也无法行动 —— 但 Boss 跳砸和虚影的崩山击需要在空中追踪玩家
+  if(e.z>2 && e.type!=='bat' && !(e.type==='boss' && (e.st==='leap'||e.st==='mDair'))) return;
 
   const chillSlow = 1 - Math.min(.55, e.chillN*.09);
-  const sp = ET[e.type].spd * e.spdMul * (e.slowT>0?.62:1) * chillSlow;
+  // e.spd 只有虚影会设（它的移速从玩家身上算），其余兵种走 ET 表
+  const sp = (e.spd||ET[e.type].spd) * e.spdMul * (e.slowT>0?.62:1) * chillSlow;
   let dx = P.x-e.x, dy = P.y-e.y, dist=Math.abs(dx);
   e.t-=dt;
 
@@ -1922,7 +2025,7 @@ function updEnemy(e,dt){
   };
 
   switch(e.type){
-  case 'boss': updBoss(e,dt,sp,dx,dy,dist); break;
+  case 'boss': (e.mirror?updMirror:updBoss)(e,dt,sp,dx,dy,dist); break;
 
   case 'goblin': case 'mini':
     if(e.st==='chase'){ face();
@@ -2114,6 +2217,196 @@ function updBoss(e,dt,sp,dx,dy,dist){
     break;
   case 'rec': if(e.t<=0){ e.st='chase'; e.t=rnd(.8,1.5); } break;
   default: e.st='chase'; e.t=1;
+  }
+}
+
+/* 虚影的弹丸。敌人侧弹丸很简单：只有 dmg / vx / vy / life，命中玩家即消失
+   （updProjs 的 p.own!=='p' 分支）。w/h/col 是给绘制用的可选项。 */
+function mShoot(e,o){
+  projs.push({own:'e', k:'arrow',
+    x:e.x+e.facing*22, y:e.y, z:o.z==null?30:o.z,
+    vx:e.facing*(o.spd||600), vy:o.vy||0,
+    dmg:e.atk*(o.mul||1), life:o.life||2.2,
+    w:o.w, h:o.h, col:o.col, hitSet:new Set()});
+}
+
+/* 虚影的被动：再生 / 剑舞领域。放在硬直判定之前调用，所以被打僵时照样运转
+   —— 和玩家身上这两张卡的行为一致。 */
+function mirrorPassive(e,dt){
+  e.mnoHit+=dt;
+  if(e.mregen>0 && e.mnoHit>3 && e.hp<e.maxHp)
+    e.hp=Math.min(e.maxHp, e.hp+e.maxHp*e.mregen*dt);
+  if(e.morbit>0){
+    e.morbA+=dt*2.2;
+    if(e.mOrbCd>0) e.mOrbCd-=dt;
+    else for(let i=0;i<e.morbit;i++){
+      const a=e.morbA+i*(Math.PI*2/e.morbit);
+      const ox=e.x+Math.cos(a)*78, oy=e.y+Math.sin(a)*32;
+      if(Math.hypot(P.x-ox,(P.y-oy)*1.6)<24 && P.z<130){
+        e.mOrbCd=.6; hurtPlayer(e.atk*.35, ox); break;
+      }
+    }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   虚影的 AI —— 玩家那四个技能的敌人侧近似实现。
+
+   castSword/castGun 全程写 P.act，搬不过来，所以每个技能做成「起手态 + 命中」
+   的状态机，复用 eStrike / own:'e' 弹丸 / updBoss 的跃击套路。
+   起手时间吃 e.maspd（玩家攻速），冷却吃 e.mcdMul（玩家冷却缩减），
+   招式效果吃 e.msk[i]（玩家点过的技能强化卡）。
+
+   多段技能只有第一下真正结算伤害：hurtPlayer 挨一下给 .62 秒无敌，后面几段
+   自动被无敌帧吃掉。这是有意的 —— 怒气爆发 8 段满额打在玩家身上就是秒杀，
+   玩家没有敌人那套韧性递减来兜。
+   --------------------------------------------------------------------------- */
+function updMirror(e,dt,sp,dx,dy,dist){
+  const gun=e.mcls==='gun';
+  const SK=gun?SKILLS_GUN:SKILLS_SWORD;
+  const A=1/e.maspd;                       // 起手时间系数：攻速越高越短
+  for(let i=0;i<4;i++) if(e.mcds[i]>0) e.mcds[i]-=dt;
+  if(e.mSumCd>0) e.mSumCd-=dt;
+  if(Math.abs(dx)>6 && (e.st==='chase'||e.st==='idle')) e.facing=dx>0?1:-1;
+
+  const go=(i,st,t)=>{ e.mcds[i]=SK[i].cd*e.mcdMul; e.st=st; e.t=t; SND.ewind(); };
+  const L=Math.hypot(dx,dy*1.6)||1;
+  const mv=k=>{ e.x+=dx/L*sp*k*dt; e.y+=dy/L*sp*k*.6*dt; e.walk+=dt*9; };
+
+  switch(e.st){
+  case 'chase': {
+    if(gun){
+      // 神枪手虚影：拉开距离风筝，并把纵深对齐到玩家这一条线上（子弹只走直线）
+      if(dist<200) mv(-.85);
+      else if(dist>420) mv(.95);
+      else if(Math.abs(dy)>10){ e.y+=Math.sign(dy)*sp*.8*dt; e.walk+=dt*8; }
+    } else {
+      if(dist>52 || Math.abs(dy)>22) mv(1);
+    }
+    if(e.t>0) break;
+    // ---- 出招选择：按情境挑能放的技能，都不合适就走平A 连招 ----
+    if(e.mminion>0 && e.mSumCd<=0 && enemies.length<=e.mminion){
+      e.mSumCd=15; e.st='mSum'; e.t=.75; SND.ewind();
+    } else if(gun){
+      if(e.mcds[1]<=0 && dist<150)                    go(1,'mS',.16*A);  // 后跳散弹
+      else if(e.mcds[3]<=0 && dist>200 && Math.abs(dy)<28) go(3,'mF',.42*A);  // 银弹
+      else if(e.mcds[2]<=0 && dist>150)               go(2,'mD',.55*A);  // 银光落刃
+      else if(e.mcds[0]<=0 && dist<320)               go(0,'mZ',.20*A);  // 浮空弹
+      else if(dist<430 && Math.abs(dy)<30){ e.st='cwind'; e.t=.20*A; }
+      else e.t=.25;
+    } else {
+      if(e.mcds[1]<=0 && dist<120)                    go(1,'mS',.06*A);  // 怒气爆发（瞬发）
+      else if(e.mcds[2]<=0 && dist>150)               go(2,'mD',.50*A);  // 崩山击
+      else if(e.mcds[3]<=0 && dist>240)               go(3,'mF',.34*A);  // 波动剑
+      else if(e.mcds[0]<=0 && dist<74)                go(0,'mZ',.22*A);  // 上挑
+      else if(dist<62 && Math.abs(dy)<26){ e.st='cwind'; e.t=.18*A; }
+      else e.t=.22;
+    }
+    break; }
+
+  // ---- 平A 连招：按玩家的 comboMax 连几段 ----
+  case 'cwind':
+    if(e.t<=0){
+      if(gun) mShoot(e,{mul:.8, spd:900, col:'#ffd0a0'});
+      else eStrike(e,30,42,30,.85);
+      e.mstep++;
+      if(e.mstep>=e.mcombo){ e.mstep=0; e.st='rec'; e.t=.34*A; }
+      else e.t=(gun?.20:.24)*A;
+    }
+    break;
+
+  // ---- 技能 0：上挑 / 浮空弹 ----
+  case 'mZ':
+    if(e.t<=0){
+      e.mtick=(e.mtick||0)+1;
+      if(gun) mShoot(e,{mul:e.msk[0]?1.45:1.0, spd:860, vy:(e.mtick-2)*42});
+      else eStrike(e, e.msk[0]?44:34, e.msk[0]?60:46, 32, e.msk[0]?1.5:1.05);
+      if(gun && e.mtick<3) e.t=.09*A;
+      else { e.mtick=0; e.st='rec'; e.t=.30*A; }
+    }
+    break;
+
+  // ---- 技能 1：怒气爆发 / 后跳散弹 ----
+  case 'mS':
+    if(e.t<=0){
+      if(gun){
+        e.vx=-e.facing*520; e.vz=300;                    // 向后跃开
+        const n=e.msk[1]?7:5;
+        for(let k=0;k<n;k++) mShoot(e,{mul:1.0, spd:700, vy:(k-(n-1)/2)*90, life:.55});
+        SND.dash();
+        e.st='rec'; e.t=.45*A;
+      } else {
+        // 原地环形爆发，一圈圈往外扩；只有第一段真正结算（后面被无敌帧吃掉）
+        e.mtick=(e.mtick||0)+1;
+        const R=(e.msk[1]?138:110)*(.72+e.mtick*.09);
+        fxs.push({k:'ring',x:e.x,y:e.y,t:0,dur:.28,r:R});
+        if(Math.hypot(P.x-e.x,(P.y-e.y)*1.6)<R && P.z<80) hurtPlayer(e.atk*1.5, e.x);
+        cam.shake=Math.max(cam.shake,7); SND.boom();
+        if(e.mtick<(e.msk[1]?5:4)) e.t=.10;
+        else { e.mtick=0; e.st='rec'; e.t=.55*A; }
+      }
+    }
+    break;
+
+  // ---- 技能 2：崩山击（前跃重砸）/ 银光落刃（一列延时爆炸） ----
+  case 'mD':
+    if(e.t<=0){
+      if(gun){
+        const n=e.msk[2]?7:5;
+        for(let k=0;k<n;k++)
+          projs.push({own:'e', k:'zone', x:clamp(P.x+(k-(n-1)/2)*86,30,ROOM_W-30), y:P.y, z:0,
+            vx:0, vy:0, r:58, fuse:.70+k*.11, t:0, dmg:e.atk*.9, life:9});
+        SND.eshoot();
+        e.st='rec'; e.t=.60*A;
+      } else { e.vz=560; e.lx=P.x; e.ly=P.y; e.st='mDair'; e.t=.75; }
+    }
+    break;
+  case 'mDair': {
+    const k=Math.min(1, dt*3.2);
+    e.x += (e.lx-e.x)*k; e.y += (e.ly-e.y)*k;      // 空中追踪落点
+    if(e.z<=0 && e.vz<=0){
+      const R=e.msk[2]?214:150;
+      cam.shake=24; flash=Math.max(flash,.26);
+      fxs.push({k:'ring',x:e.x,y:e.y,t:0,dur:.5,r:R});
+      if(Math.hypot(P.x-e.x,(P.y-e.y)*1.6)<R && P.z<70) hurtPlayer(e.atk*1.6, e.x);
+      if(e.msk[2]) for(const d of [-1,1]){             // 强化版：落地追加左右冲击波
+        const bx=clamp(e.x+d*R*.85, 20, ROOM_W-20);
+        fxs.push({k:'ring',x:bx,y:e.y,t:0,dur:.4,r:74});
+        if(Math.hypot(P.x-bx,(P.y-e.y)*1.6)<74 && P.z<70) hurtPlayer(e.atk*.9, bx);
+      }
+      SND.quake();
+      e.st='rec'; e.t=.85*A;
+    }
+    break; }
+
+  // ---- 技能 3：波动剑（穿透剑气）/ 银弹（高速贯穿） ----
+  case 'mF':
+    if(e.t<=0){
+      if(gun) mShoot(e,{mul:e.msk[3]?3.0:2.2, spd:1180, life:1.6, w:16, h:5, col:'#cfe8ff'});
+      else {
+        const n=e.msk[3]?3:1;
+        for(let k=0;k<n;k++)
+          mShoot(e,{mul:1.5, spd:560, vy:(k-(n-1)/2)*70, life:2.2, w:26, h:8, col:'#c9a8ff'});
+      }
+      SND.eshoot();
+      e.st='rec'; e.t=.40*A;
+    }
+    break;
+
+  // ---- 战魂 → 召唤同数量的小鬼 ----
+  case 'mSum':
+    if(e.t<=0){
+      for(let i=0;i<e.mminion;i++){
+        const m=makeEnemy('mini', e.x+rnd(-70,70), clamp(e.y+rnd(-30,30),FLOOR_TOP,FLOOR_BOT));
+        m.affix=null; enemies.push(m);
+      }
+      fxs.push({k:'ring',x:e.x,y:e.y,t:0,dur:.5,r:110});
+      e.st='rec'; e.t=.6*A;
+    }
+    break;
+
+  case 'rec': if(e.t<=0){ e.st='chase'; e.t=rnd(.12,.35); } break;
+  default: e.st='chase'; e.t=.3;
   }
 }
 
@@ -2364,8 +2657,18 @@ function update(dt){
 
 function roomClear(){
   if(gameState!=='play') return;
+  if(mirrorRoom){ gameWin(true); return; }        // 虚影倒下 —— 真结局
   if(roomN===ROOMS){
-    if(floorN>=FLOORS){ gameWin(); return; }   // 最终层 Boss 已倒下 —— 通关
+    if(floorN>=FLOORS){
+      /* 巨魔王倒下 —— 通关在这一刻就成立，纪录和周目解锁立刻落地。
+         虚影是通关之后的额外挑战，打输了不许掉通关，所以结算拆成了
+         recordWin()（存档）+ gameWin()（弹层）两半。 */
+      recordWin();
+      mirrorPending=true;
+      roomN=1;                    // 让 drawCards 走「Boss 后整排传奇」那条分支
+      showCards();
+      return;
+    }
     floorN++; roomN=1;
   } else roomN++;
   showCards();
@@ -2459,6 +2762,27 @@ function humanoid(sx,by,o){
   }
 }
 
+/* 刀 / 双枪的绘制。玩家和虚影共用 —— 虚影必须拿着和你一样的武器，
+   不然「这是我」的感觉立刻就散了。
+   gun 为真时 a 是后坐量（px），否则 a 是挥刀角度（rad）。 */
+function drawWeapon(sx, sy, facing, gun, a){
+  ctx.save();
+  if(gun){
+    ctx.translate(sx+facing*10, sy-34); ctx.scale(facing,1);
+    ctx.rotate(-.06 - a*.02);
+    ctx.fillStyle='#8a6a32'; ctx.fillRect(-7,-2,11,13);          // 握把
+    ctx.fillStyle='#3d4450'; ctx.fillRect(-4-a,-5,30,10);        // 枪身
+    ctx.fillStyle='#606a7a'; ctx.fillRect(24-a,-3.5,12,7);       // 枪管
+    ctx.fillStyle='#c9a24a'; ctx.fillRect(-2-a,-5,7,3);
+  } else {
+    ctx.translate(sx+facing*8, sy-34); ctx.scale(facing,1); ctx.rotate(a);
+    ctx.fillStyle='#d9dde6'; ctx.fillRect(0,-3.5,46,7);
+    ctx.fillStyle='#f2f5fa'; ctx.fillRect(0,-3.5,46,2.4);
+    ctx.fillStyle='#8a6a32'; ctx.fillRect(-9,-6,10,12);
+  }
+  ctx.restore();
+}
+
 function drawPlayer(){
   shadow(P.x,P.y,P.z,17);
   const [sx,sy]=W2S(P.x,P.y,P.z);
@@ -2466,34 +2790,77 @@ function drawPlayer(){
   if(P.inv>0 && P.flashT<=0) ctx.globalAlpha = .45+.55*Math.abs(Math.sin(now()*26));
   humanoid(sx,sy,{w:23,h:56,col:CLS.col,dk:CLS.dk,face:P.facing,
     walk:P.walk, flash:Math.max(0,P.flashT), lean:P.lean, accent:CLS.accent});
-  if(CLS.weapon==='gun'){
-    // 双枪：出招时后坐
-    let rc=0;
-    if(P.act){ const k=clamp(P.act.t/Math.min(P.act.dur,.22),0,1); rc=(1-k)*9; }
-    ctx.save(); ctx.translate(sx+P.facing*10, sy-34); ctx.scale(P.facing,1);
-    ctx.rotate(-.06 - rc*.02);
-    ctx.fillStyle='#8a6a32'; ctx.fillRect(-7,-2,11,13);          // 握把
-    ctx.fillStyle='#3d4450'; ctx.fillRect(-4-rc,-5,30,10);       // 枪身
-    ctx.fillStyle='#606a7a'; ctx.fillRect(24-rc,-3.5,12,7);      // 枪管
-    ctx.fillStyle='#c9a24a'; ctx.fillRect(-2-rc,-5,7,3);
-    ctx.restore();
+  const gun = CLS.weapon==='gun';
+  let a;
+  if(gun){
+    a = P.act ? (1-clamp(P.act.t/Math.min(P.act.dur,.22),0,1))*9 : 0;   // 出招时后坐
   } else {
-    let ang=-0.55;
+    a = -0.55;
     if(P.act){
       const k=clamp(P.act.t/P.act.dur,0,1);
-      ang = -2.2 + k*3.4;
-      if(P.act.kind==='sk'&&P.act.id===2) ang=-2.6+k*4.4;
+      // 崩山击的挥砸幅度更大
+      a = (P.act.kind==='sk' && P.act.id===2) ? -2.6+k*4.4 : -2.2+k*3.4;
     }
-    ctx.save(); ctx.translate(sx+P.facing*8, sy-34); ctx.scale(P.facing,1); ctx.rotate(ang);
-    ctx.fillStyle='#d9dde6'; ctx.fillRect(0,-3.5,46,7);
-    ctx.fillStyle='#f2f5fa'; ctx.fillRect(0,-3.5,46,2.4);
-    ctx.fillStyle='#8a6a32'; ctx.fillRect(-9,-6,10,12);
-    ctx.restore();
   }
+  drawWeapon(sx, sy, P.facing, gun, a);
+  ctx.restore();
+}
+
+/* 虚影：和玩家同一套 humanoid、同一把武器、同样的体型，只换配色并叠发光残影。
+   「像我但不是我」全靠这个 —— 体型和武器必须一致，颜色必须一眼分得开。 */
+function drawMirror(e){
+  const [sx,sy]=W2S(e.x,e.y,e.z);
+  const [gx,gy]=W2S(e.x,e.y,0);
+  const gun=e.mcls==='gun';
+  const skin={w:23,h:56,col:e.col,dk:e.dk,face:e.facing,
+              walk:e.walk, flash:0, lean:e.lean, accent:'#e0ccff'};
+
+  // 出场：紫雾里逐渐显形
+  if(e.spawnT>0){
+    const k=clamp(1-e.spawnT/1.15,0,1);
+    ctx.save(); ctx.globalCompositeOperation='lighter';
+    const rg=ctx.createRadialGradient(gx,gy-30,4,gx,gy-30,74);
+    rg.addColorStop(0,`rgba(180,138,255,${.30+k*.32})`);
+    rg.addColorStop(1,'rgba(120,70,220,0)');
+    ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(gx,gy-30,74,0,7); ctx.fill();
+    ctx.globalAlpha=k*.85;
+    humanoid(sx,sy,skin);
+    ctx.restore();
+    return;
+  }
+
+  shadow(e.x,e.y,e.z,e.hw*1.1);
+  // 脚下紫环，沿用精英/远程那套标记的写法
+  ctx.save(); ctx.globalCompositeOperation='lighter';
+  ctx.globalAlpha=.38+Math.sin(now()*3.6)*.12;
+  ctx.strokeStyle='#b48aff'; ctx.lineWidth=2.6;
+  ctx.beginPath(); ctx.ellipse(gx,gy,e.hw+14,(e.hw+14)*.42,0,0,7); ctx.stroke();
+  ctx.restore();
+
+  // 残影：往身后拖两层
+  ctx.save(); ctx.globalCompositeOperation='lighter';
+  for(let i=2;i>=1;i--){
+    ctx.globalAlpha=.15*i/2;
+    humanoid(sx-e.facing*i*7, sy, skin);
+  }
+  ctx.restore();
+
+  // 武器姿态：从状态机反推，不需要 P.act 那种精确进度
+  let a;
+  if(gun) a = (e.st==='cwind'||e.st==='mZ'||e.st==='mF') ? 7 : 0;
+  else if(e.st==='mDair') a=-2.5;
+  else if(e.st==='cwind'||e.st==='mZ') a=-1.5;
+  else if(e.st==='mS') a=1.2;
+  else a=-0.55;
+
+  ctx.save();
+  humanoid(sx,sy,{...skin, flash:Math.max(0,e.flashT)});
+  drawWeapon(sx, sy, e.facing, gun, a);
   ctx.restore();
 }
 
 function drawEnemy(e){
+  if(e.mirror) return drawMirror(e);      // 虚影有自己的一整套（含出场演出）
   if(e.spawnT>0){
     const [sx,sy]=W2S(e.x,e.y,0);
     ctx.save(); ctx.globalAlpha=.5;
@@ -2775,10 +3142,12 @@ function drawProj(p){
       ctx.beginPath(); ctx.ellipse(sx-Math.sign(p.vx)*w*2.2,sy,w*2.4,h*.9,0,0,7); ctx.fill();
     }
   } else {
-    ctx.globalAlpha=.95; ctx.fillStyle='#ffd9a0';
-    ctx.beginPath(); ctx.ellipse(sx,sy,9,3,Math.atan2(p.vy,p.vx),0,7); ctx.fill();
+    // w/h/col 只有虚影的弹丸会带（剑气比箭粗得多），弓手/术士照旧走默认值
+    const w=p.w||9, h=p.h||3;
+    ctx.globalAlpha=.95; ctx.fillStyle=p.col||'#ffd9a0';
+    ctx.beginPath(); ctx.ellipse(sx,sy,w,h,Math.atan2(p.vy,p.vx),0,7); ctx.fill();
     ctx.globalAlpha=.3;
-    ctx.beginPath(); ctx.ellipse(sx-Math.sign(p.vx)*16,sy,18,2.4,0,0,7); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(sx-Math.sign(p.vx)*w*1.8,sy,w*2,h*.8,0,0,7); ctx.fill();
   }
   ctx.restore();
 }
@@ -2932,11 +3301,14 @@ function syncHUD(){
   $('hpghost').style.transform=`scaleX(${ghostHp})`;
   if(ghostHp>r) ghostHp += (r-ghostHp)*.08;
   $('hptxt').textContent=`${Math.ceil(P.hp)} / ${P.maxHp}`;
-  $('fN').textContent=floorN+' / '+FLOORS; $('rN').textContent=roomN; $('kN').textContent=kills;
+  // 虚影关不是「第 11 层」，显示成 10/10 第 1 间会很怪，直接写「终」
+  $('fN').textContent = mirrorRoom ? '终' : (floorN+' / '+FLOORS);
+  $('rN').textContent = mirrorRoom ? '—' : roomN;
+  $('kN').textContent=kills;
   const kn=$('kindN');
-  kn.textContent = roomKind==='elite'?'· 精英房' : roomKind==='siege'?'· 围攻房'
+  kn.textContent = mirrorRoom?'· 虚影' : roomKind==='elite'?'· 精英房' : roomKind==='siege'?'· 围攻房'
                  : roomKind==='boss'?'· BOSS' : '';
-  kn.style.color = roomKind==='elite'?'#ffd479' : roomKind==='siege'?'#ff9ab4' : '#ffb4a0';
+  kn.style.color = mirrorRoom?'#b48aff' : roomKind==='elite'?'#ffd479' : roomKind==='siege'?'#ff9ab4' : '#ffb4a0';
 
   const at=$('affixTip');
   if(roomAffix){ at.className=''; at.innerHTML=`本间敌人：<b>${roomAffix.nm}</b> · ${roomAffix.ds}`; }
@@ -2963,6 +3335,11 @@ function syncHUD(){
     dashEl.chg.textContent = P.dashMax>1 ? P.dashChg+'/'+P.dashMax : '';
   }
   if(boss){ $('bossWrap').classList.add('on');
+    // 虚影用紫条，和巨魔王的橙红分开
+    $('bossFill').style.background = boss.mirror
+      ? 'linear-gradient(180deg,#a878e8,#4a2a86)'
+      : 'linear-gradient(180deg,#c65a3a,#6e2412)';
+    $('bossNm').style.color = boss.mirror ? '#cbaaff' : '#ffb4a0';
     $('bossFill').style.transform=`scaleX(${clamp(boss.hp/boss.maxHp,0,1)})`; }
   else $('bossWrap').classList.remove('on');
 }
@@ -3134,11 +3511,13 @@ let pendingCards=[];
 function showCards(){
   gameState='cards';
   pendingCards=drawCards();
-  $('cardSub').textContent = roomN===1
-    ? (floorN===FLOORS
-        ? `第 ${floorN-1} 层 已通关 —— 进入最终层`
-        : `第 ${floorN-1} 层 已通关 —— 进入第 ${floorN} 层`)
-    : `第 ${roomN-1} 间 已清空`;
+  $('cardSub').textContent = mirrorPending
+    ? '巨魔王已倒下 —— 最后的对手是你自己'
+    : roomN===1
+      ? (floorN===FLOORS
+          ? `第 ${floorN-1} 层 已通关 —— 进入最终层`
+          : `第 ${floorN-1} 层 已通关 —— 进入第 ${floorN} 层`)
+      : `第 ${roomN-1} 间 已清空`;
   const row=$('cardRow'); row.innerHTML='';
   pendingCards.forEach((c,i)=>{
     const lv=taken[c.id]||0;
@@ -3194,6 +3573,23 @@ function gameOver(){
   const t=Math.round(now()-runStart);
   const prev=SAVE.best[ngLevel], deep=prev?`${prev.floor}-${prev.room}`:'';
   const fresh=recordRun(false, t);
+  /* 死在虚影手里是特殊情况：巨魔王早已倒下，通关和周目解锁在 recordWin() 里
+     就已经落地了。标题不能写「你倒下了」—— 那看起来像这一局白打了。 */
+  if(winInfo){
+    $('ovTitle').textContent='已 通 关';
+    $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+'未能战胜自己的虚影';
+    $('ovStats').innerHTML=
+      `通关用时 <b>${fmtTime(winInfo.t)}</b>` +
+        (winInfo.fresh?' <i class="nr">新纪录</i>':'') + `<br>` +
+      `<span class="dim">虚影未击败 —— 再来一局试试</span><br>` +
+      `击杀敌人 <b>${kills}</b><br>` +
+      `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张` +
+      (winInfo.unlocked
+        ? `<br><br><b class="unlock">已解锁第 ${SAVE.ngMax} 周目</b>`
+        : '');
+    $('mOver').classList.remove('off');
+    return;
+  }
   $('ovTitle').textContent='你 倒 下 了';
   $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+`死于第 ${floorN} 层 第 ${roomN} 间`;
   $('ovStats').innerHTML=
@@ -3205,10 +3601,10 @@ function gameOver(){
   $('mOver').classList.remove('off');
 }
 
-/* 打完第 FLOORS 层 Boss —— 复用倒下弹层，只换文案 */
-function gameWin(){
-  gameState='over';
-  SND.clear(); SND.intense(0);
+/* 巨魔王倒下 —— 通关在这一刻就成立，只写存档、不弹结算。
+   后面还有虚影关，弹层要等那一关分出胜负；打输虚影不许掉通关，
+   所以存档必须先于虚影落地。通关用时也定格在这一刻，虚影关不计时。 */
+function recordWin(){
   const t=Math.round(now()-runStart);
   const prev=SAVE.best[ngLevel];
   const prevTime=(prev && prev.cleared)?prev.time:0;
@@ -3216,14 +3612,25 @@ function gameWin(){
   // 通关即解锁下一周目，并把标题页默认选到新那档 —— 这是「再来一局」的钩子
   const unlocked = ngLevel>=SAVE.ngMax;
   if(unlocked){ SAVE.ngMax=ngLevel+1; ngPick=SAVE.ngMax; writeSave(); }
+  winInfo={t, prevTime, fresh, unlocked};
+  return winInfo;
+}
 
-  $('ovTitle').textContent='通 关';
-  $('ovSub').textContent = ngLevel>1
-    ? `第 ${ngLevel} 周目 · ${FLOORS} 层全部打通`
-    : `${FLOORS} 层全部打通 —— 巨魔王已倒下`;
+/* 结算弹层。beatMirror 为真 = 连虚影也打倒了，那才是真结局。 */
+function gameWin(beatMirror){
+  gameState='over';
+  SND.clear(); SND.intense(0);
+  const w = winInfo || recordWin();      // 兜底：正常流程里 recordWin 已经跑过
+  const {t, prevTime, fresh, unlocked} = w;
+
+  $('ovTitle').textContent = beatMirror ? '真 · 通 关' : '通 关';
+  $('ovSub').textContent = (ngLevel>1?`第 ${ngLevel} 周目 · `:'') + (beatMirror
+    ? '你战胜了自己的虚影'
+    : `${FLOORS} 层全部打通 —— 巨魔王已倒下`);
   $('ovStats').innerHTML=
     `通关用时 <b>${fmtTime(t)}</b>` +
       (fresh?' <i class="nr">新纪录</i>':(prevTime?` <span class="dim">（最佳 ${fmtTime(prevTime)}）</span>`:'')) + `<br>` +
+    (beatMirror?`<b class="unlock">虚影已击败</b><br>`:'') +
     `击杀敌人 <b>${kills}</b><br>` +
     `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张<br>` +
     `剩余生命 <b>${Math.max(0,Math.round(P.hp))} / ${Math.round(P.maxHp)}</b>` +

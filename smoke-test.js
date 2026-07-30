@@ -127,10 +127,12 @@ globalThis.__run = function(cls, frames){
 };
 globalThis.__winPath = function(){
   // 随机输入 5000 帧只跑得到第 1 层，通关那条路永远测不到。
-  // 这里直接把进度顶到 Boss 前，验证「中间层进下一层 / 最终层通关」两个分支。
+  // 这里直接把进度顶到 Boss 前，验证三段：中间层进下一层 / 巨魔王 / 虚影关。
   const errs = [];
+  const ngPick0 = ngPick;
   startGame('sword');
 
+  // ---- 中间层：Boss 清完进下一层 ----
   floorN = 3; roomN = ROOMS;
   roomClear(); __drain();
   if (floorN !== 4 || roomN !== 1)
@@ -138,17 +140,64 @@ globalThis.__winPath = function(){
   if (gameState !== 'cards')
     errs.push('中间层 Boss 清完没弹选卡：gameState=' + gameState);
 
+  // ---- 巨魔王：通关这一刻就成立（存档先落地），但不结算 —— 后面还有虚影关 ----
   gameState = 'play';
   floorN = FLOORS; roomN = ROOMS;
   roomClear(); __drain();
-  if (gameState !== 'over')
-    errs.push('最终层 Boss 清完没有通关：gameState=' + gameState);
+  if (gameState !== 'cards')
+    errs.push('巨魔王清完没进选卡：gameState=' + gameState);
+  if (!mirrorPending)
+    errs.push('巨魔王清完没安排虚影关：mirrorPending=' + mirrorPending);
+  if (!winInfo)
+    errs.push('巨魔王清完没立刻记通关 —— 打输虚影就会把通关掉掉');
+  if (!(SAVE.best[ngLevel] || {}).cleared)
+    errs.push('巨魔王清完存档里没写 cleared');
+  if (SAVE.ngMax < 2)
+    errs.push('巨魔王清完没解锁下一周目：ngMax=' + SAVE.ngMax);
   if (floorN !== FLOORS)
     errs.push('通关后层数还在涨：floorN=' + floorN + '（应停在 ' + FLOORS + '）');
-  const title = $('ovTitle').textContent || '';
-  if (title.indexOf('通') < 0)
-    errs.push('通关标题没设置：' + JSON.stringify(title));
 
+  // ---- 进虚影关：场上只有虚影、回满血、没有波次和词条 ----
+  P.hp = 1;                                   // 验证进门回满血
+  choose(0); __drain();
+  if (gameState !== 'play')  errs.push('选完卡没开打：gameState=' + gameState);
+  if (!mirrorRoom)           errs.push('选完卡没进虚影关：mirrorRoom=false');
+  if (mirrorPending)         errs.push('进了虚影关 mirrorPending 没清 —— 会再排一间');
+  if (P.hp !== P.maxHp)      errs.push('虚影关没回满血：' + P.hp + ' / ' + P.maxHp);
+  if (waves.length !== 0)    errs.push('虚影关不该有波次：waves=' + waves.length);
+  if (roomAffix)             errs.push('虚影关不该带词条：' + roomAffix);
+  if (enemies.length !== 1 || !enemies[0].mirror)
+    errs.push('虚影关场上不是唯一一个虚影：' + enemies.length + ' 个敌人');
+  else {
+    const m = enemies[0];
+    if (!isFinite(m.hp)  || m.hp  <= 0) errs.push('虚影血量异常：' + m.hp);
+    if (!isFinite(m.atk) || m.atk <= 0) errs.push('虚影伤害异常：' + m.atk);
+    if (!isFinite(m.spd) || m.spd <= 0) errs.push('虚影移速异常：' + m.spd);
+  }
+
+  // ---- 打倒虚影 → 真结局。走 update() 的清屋判定，顺带验证「waves 空也能清屋」 ----
+  enemies.length = 0;
+  update(1 / 60); __drain();
+  if (gameState !== 'over')
+    errs.push('虚影倒下没有结算：gameState=' + gameState);
+  const title = $('ovTitle').textContent || '';
+  if (title.indexOf('真') < 0)
+    errs.push('打倒虚影没给真结局标题：' + JSON.stringify(title));
+
+  // ---- 反例：死在虚影手里。通关早已落地，不许显示「你倒下了」 ----
+  ngPick = 1;                                 // 钉死周目，别被上面刚解锁的第 2 周目带跑
+  startGame('sword');
+  gameState = 'play'; floorN = FLOORS; roomN = ROOMS;
+  roomClear(); __drain();                     // 巨魔王倒下 → 通关落地
+  choose(0); __drain();                       // 进虚影关
+  gameOver();                                 // 这一局死在虚影手里
+  const lost = $('ovTitle').textContent || '';
+  if (lost.indexOf('通') < 0)
+    errs.push('死在虚影手里把通关判没了：' + JSON.stringify(lost));
+  if (!(SAVE.best[ngLevel] || {}).cleared)
+    errs.push('死在虚影手里，存档的通关标记被冲掉了');
+
+  ngPick = ngPick0;
   return errs;
 };
 globalThis.__records = function(){
@@ -254,7 +303,7 @@ for (const cls of ['sword', 'gun']) {
 try {
   const bad = sandbox.__winPath();
   console.log(bad.length ? '❌ 通关流程：\n   ' + bad.join('\n   ')
-                         : '✅ 通关流程正常：中间层进下一层，第 10 层 Boss 清完即通关');
+                         : '✅ 通关流程正常：中间层进下一层，巨魔王倒下即通关，虚影关是通关之后的额外决战');
   if (bad.length) fail++;
 } catch (e) { console.log('❌ 通关流程测试报错：' + e.message); fail++; }
 

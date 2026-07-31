@@ -259,7 +259,7 @@
         <div class="chd"><span class="cnm">鬼剑士</span><span class="ckey">1</span></div>
         <div class="csub">近战 · 高爆发</div>
         <div class="ctip">贴身输出，靠硬直和浮空把敌人锁死在原地。上手最简单，容错靠血厚。</div>
-        <div class="cst"><span>生命 <b>130</b></span><span>移速 <b>215</b></span></div>
+        <div class="cst"><span>生命 <b>150</b></span><span>移速 <b>215</b></span></div>
         <div class="csk">Z 上挑 · S 怒气爆发 · D 崩山击 · F 波动剑</div>
       </div>
       <div class="ccard g" data-cls="gun">
@@ -769,7 +769,10 @@ const COMBO_GUN=[
   shot:{spd:900,pierce:0,life:1.0}},
  {dur:.34,at:.08,mul:1.48,kb:140,up: 90,hs:.070,st:.34,nm:'重击弹',qi:true,
   shot:{spd:1020,pierce:1,life:1.1,big:true}},
- {dur:.30,at:.06,mul:1.62,kb: 90,up:  0,hs:.060,st:.28,nm:'散射',
+ /* 三发都吃 162% 时，解锁第 4 段会让理论 DPS 瞬间 +86%。
+    改为每发 68%：三发吃满后，四段连招的对单理论 DPS 与鬼剑士基本持平，
+    同时保留散射在对群时的职业优势。 */
+ {dur:.30,at:.06,mul:0.68,kb: 90,up:  0,hs:.060,st:.28,nm:'散射',
   shot:{spd:880,pierce:1,n:3,spread:30,life:.75}},
  {dur:.42,at:.10,mul:2.35,kb:270,up:190,hs:.110,st:.52,nm:'穿甲弹',qi:true,
   shot:{spd:1200,pierce:9,life:1.3,big:true,col:'#bfe6ff'}},
@@ -819,7 +822,9 @@ const ET={
  bat    :{hp: 22,atk: 9,spd:142,hw:13,hd:11,h:32,col:'#c06cd8',dk:'#5f2f80',nm:'魔蝠',   poise:0.85},
  berserk:{hp:104,atk:16,spd: 86,hw:19,hd:15,h:58,col:'#d8504f',dk:'#7a2321',nm:'狂战士', poise:2.10},
  mini   :{hp: 16,atk: 6,spd: 96,hw:11,hd: 9,h:38,col:'#8fd47f',dk:'#4a8340',nm:'小鬼',   poise:0.70},
- boss   :{hp:1100,atk:24,spd:64,hw:38,hd:28,h:112,col:'#8a5230',dk:'#472713',nm:'巨魔王',poise:99},
+ /* 巨魔王基础攻击 24 → 19：第 5 层普通横扫约 100 伤，裸装神枪手也不会无条件满血被秒。
+    跳砸、狂暴词条和精英攻击仍可以致命，重招的躲避价值没被抹掉。 */
+ boss   :{hp:1100,atk:19,spd:64,hw:38,hd:28,h:112,col:'#8a5230',dk:'#472713',nm:'巨魔王',poise:99},
 };
 /* 远程/危险兵种：脚下画标记环，让玩家一眼分清威胁 */
 const RANGED={archer:1, mage:1};
@@ -829,7 +834,7 @@ const AFFIX=[
  {id:'split' ,nm:'分裂',ds:'死亡时裂出 2 只小鬼'},
  {id:'swift' ,nm:'疾行',ds:'移动速度 +60%'},
  {id:'rage'  ,nm:'狂暴',ds:'攻击力 +50%'},
- {id:'regen' ,nm:'再生',ds:'每秒回复 1.5% 生命'},
+ {id:'regen' ,nm:'再生',ds:'每秒回复 1.5% 生命（Boss 为 0.5%）'},
 ];
 
 /* ---------- 卡池（12 张平A线 / 7 张通用 / 5 张技能 / 2 张诅咒） ---------- */
@@ -842,12 +847,16 @@ const CARDS=[
  // ===== 平A 线：主输出成长树 =====
  {id:'edge', tag:'平A',max:5,gn:'高爆弹头',nm:'锋锐之刃', ds:v=>`平A 伤害 <i>+20%</i>`,            ap:p=>p.basicMul+=.20},
  {id:'swift',tag:'平A',max:4,gn:'快速装填',nm:'连击大师', ds:v=>`平A 攻击速度 <i>+16%</i>`,        ap:p=>p.aspd+=.16},
- {id:'sweep',tag:'平A',max:3,gn:'弹幕扩散',nm:'横扫千军', ds:v=>`平A 攻击范围 <i>+35%</i>，更容易同时打到多个敌人`, ap:p=>p.range+=.35},
+ {id:'sweep',tag:'平A',max:3,gn:'弹幕扩散',nm:'横扫千军', ds:()=>P.cls==='gun'
+    ? `子弹判定范围 <i>+35%</i>，更容易命中不同纵深的敌人`
+    : `平A 攻击范围 <i>+35%</i>，更容易同时打到多个敌人`, ap:p=>p.range+=.35},
  {id:'follow',tag:'平A',max:3,gn:'二次击发',nm:'追命',    ds:v=>`平A 命中后有 <i>22%</i> 概率立刻追加一次攻击`, ap:p=>p.follow+=.22},
  {id:'break',tag:'平A',max:2,gn:'破甲弹',nm:'破甲',     ds:v=>`平A 命中叠加破甲，每层使目标受伤 <i>+7%</i>（上限 <i>${4+4*(v+1)}</i> 层）`, ap:p=>{p.brk+=.07;p.brkMax+=4}},
- {id:'qi',   tag:'平A',max:2,gn:'穿甲弹链',nm:'剑气纵横', ds:v=>`平A 的<i>重斩 / 终结斩</i>额外射出剑气（远程穿透）`, ap:p=>p.qi+=1},
+ {id:'qi',   tag:'平A',max:2,gn:'穿甲弹链',nm:'剑气纵横', ds:()=>P.cls==='gun'
+    ? `平A 的<i>重击弹 / 穿甲弹</i>额外射出穿透弹链`
+    : `平A 的<i>重斩 / 终结斩</i>额外射出剑气（远程穿透）`, ap:p=>p.qi+=1},
  {id:'blood',tag:'平A',max:3,gn:'嗜血弹',nm:'血刃',     ds:`平A 造成伤害的 <i>7%</i> 转化为治疗`, ap:p=>p.lifesteal+=.07},
- {id:'dance',tag:'平A',max:2,gn:'弹幕节奏',nm:'剑舞',     ds:v=>`每连续命中 8 次，攻速 <i>+6%</i>（上限 8 层）。脱战 3 秒清空`, ap:p=>p.dance+=1},
+ {id:'dance',tag:'平A',max:2,gn:'弹幕节奏',nm:'剑舞',     ds:v=>`每连续命中 8 次，每层攻速 <i>+${6*(v+1)}%</i>（上限 8 层）。脱战 3 秒清空`, ap:p=>p.dance+=1},
  {id:'ramp', tag:'平A',max:2,gn:'连射加速',nm:'势如破竹', ds:v=>`连招后段伤害提升：2 段 <i>+20%</i>，3 段及之后 <i>+45%</i>`, ap:p=>p.ramp+=1},
  {id:'inf',  tag:'平A',max:2,gn:'弹链延长',nm:'无限连',   ds:v=>v===0?`平A 连招增加一段：<i>旋斩</i>（全方位横扫）`:`平A 连招再增加一段：<i>终结斩</i>（巨额伤害 + 击飞）`, ap:p=>p.comboMax++},
  {id:'bolt', tag:'平A',max:3,gn:'雷击弹',nm:'雷斩',     ds:v=>`平A 有 <i>15%</i> 概率引落雷，造成 <i>35</i> 点额外伤害`, ap:p=>p.bolt+=.15},
@@ -882,7 +891,7 @@ const CARDS=[
  {id:'vsbleed',tag:'元素',max:3,nm:'见血封喉',ds:`对<i>流血中</i>的敌人伤害 <i>+30%</i>`, ap:p=>p.vsBleed+=.30, req:'bleed'},
  {id:'poison',tag:'元素',max:1,nm:'剧毒涂层', ds:`平A 附加<i>中毒</i>：持续掉血，并降低该敌人<i>攻击力最多 45%</i>`, ap:p=>p.poisonOn=1},
  {id:'doom',  tag:'元素',max:1,nm:'厄运印记', ds:`平A 有 <i>28%</i> 概率打上<i>厄运</i>：1.2 秒后一次性爆发 180% 伤害`, ap:p=>p.doomOn=.28},
- {id:'doompow',tag:'元素',max:2,nm:'深度厄运',ds:`<i>厄运</i>可无限叠加，且爆发伤害 <i>+70%</i>`, ap:p=>p.doomPow+=.70, req:'doom'},
+ {id:'doompow',tag:'元素',max:2,nm:'深度厄运',ds:`<i>厄运</i>爆发伤害 <i>+70%</i>，重复触发会累积到同一次爆发`, ap:p=>p.doomPow+=.70, req:'doom'},
  {id:'chain', tag:'元素',max:3,nm:'连锁闪电', ds:`平A 命中时闪电<i>弹跳到附近 1 个敌人</i>，造成 55% 伤害`, ap:p=>p.chainN+=1},
 
  // ===== 触发：条件型（死亡细胞式）=====
@@ -896,7 +905,7 @@ const CARDS=[
  {id:'streak',tag:'触发',max:2,nm:'连杀',     ds:`每<i>连续击杀 5 个</i>敌人回复 <i>7%</i> 生命（受伤会中断连杀）`, ap:p=>p.streakHeal+=.07},
 
  // ===== 弹道：远程/剑气修饰（霓虹深渊式，越叠越离谱）=====
- {id:'split', tag:'弹道',max:2,nm:'散射',     ds:()=>`每次射出${PJ()}时<i>额外多射 2 发</i>（每发伤害 70%）`, ap:p=>p.projN+=2},
+ {id:'split', tag:'弹道',max:2,nm:'散射',     ds:()=>`每次射出${PJ()}时<i>额外多射 2 发</i>（每发伤害 40%）`, ap:p=>p.projN+=2},
  {id:'bounce',tag:'弹道',max:2,nm:'弹射',     ds:()=>`${PJ()}打中敌人后<i>反弹</i>去找下一个目标`, ap:p=>p.bounce+=1},
  {id:'homing',tag:'弹道',max:2,nm:'追踪',     ds:()=>`${PJ()}会<i>自动拐向</i>最近的敌人`, ap:p=>p.homing+=1},
  {id:'bigproj',tag:'弹道',max:3,nm:'巨弹',    ds:()=>`${PJ()}体积 <i>+70%</i>，伤害 <i>+22%</i>`, ap:p=>p.projBig+=1},
@@ -921,23 +930,23 @@ const CARDS=[
  {id:'dbljump',tag:'机动',max:2,nm:'羽翼',   ds:`获得<b>二段跳</b>（可再叠一次变三段）`, ap:p=>p.jumpMax+=1},
  {id:'dashchg',tag:'机动',max:2,nm:'疾风',   ds:`闪避<b>次数 +1</b>，可以连续冲刺`, ap:p=>p.dashMax+=1},
  {id:'killcd', tag:'机动',max:3,nm:'杀戮天性',ds:`每击杀一个敌人，所有技能冷却<i>减少 1.1 秒</i>`, ap:p=>p.killCdr+=1.1},
- {id:'plan',   tag:'机动',max:2,nm:'谋划',   ds:`释放技能后，<b>下一次平A 伤害 ×2.6</b>（3 秒内有效）`, ap:p=>p.plan+=1},
+ {id:'plan',   tag:'机动',max:1,nm:'谋划',   ds:`释放技能后，<b>下一次平A 伤害 ×2.6</b>（3 秒内有效）`, ap:p=>p.plan=1},
 
  // ===== 生存（死亡细胞 · 霓虹深渊）=====
  {id:'laststand',tag:'续航',max:1,nm:'濒死活力',ds:`受到致命伤害时<b>锁血不死</b>，若 6 秒内击杀 <i>3 个</i>敌人则回复 40% 生命，否则倒下`, ap:p=>p.lastStand=1},
- {id:'necro', tag:'续航',max:2,nm:'死灵法术', ds:`每击杀 <i>6</i> 个敌人补一层<b>护盾</b>（每层<b>完全抵挡</b>一次伤害，不论多重）。补盾后 <i>6 秒</i>内不再补，且不超过护盾上限`, ap:p=>p.killWard+=1},
+ {id:'necro', tag:'续航',max:2,nm:'死灵法术', ds:v=>`每击杀 <i>${v===0?6:3}</i> 个敌人补一层<b>护盾</b>（每层<b>完全抵挡</b>一次伤害）。补盾后 <i>6 秒</i>内不再补，且不超过护盾上限`, ap:p=>p.killWard+=1},
  {id:'regen', tag:'续航',max:3,nm:'再生',    ds:`<i>脱离战斗 3 秒</i>后，每秒回复 1.6% 最大生命`, ap:p=>p.regen+=.016},
  {id:'corrupt',tag:'续航',max:2,nm:'腐化',   ds:`拾取<i>血球</i>后 5 秒内伤害 <i>+55%</i>`, ap:p=>p.orbRage+=.55},
  {id:'overload',tag:'续航',max:2,nm:'过载核心',ds:`每持有一层<b>护盾</b>，伤害 <i>+20%</i>（护盾来自守护结界 / 死灵法术）`, ap:p=>p.wardDmg+=.20},
 
  // ===== 弹道追加 =====
  {id:'projboom',tag:'弹道',max:2,nm:'爆裂弹头',ds:()=>`${PJ()}命中时<b>产生爆炸</b>，波及周围敌人`, ap:p=>p.projBoom+=1},
- {id:'crown', tag:'弹道',max:2,nm:'弹幕皇冠', ds:()=>`<b>本房间内</b>每击杀 3 个敌人，每次<b>多射一发</b>${PJ()}（进下一间清零）`, ap:p=>p.crown+=1},
+ {id:'crown', tag:'弹道',max:2,nm:'弹幕皇冠', ds:v=>`<b>本房间内</b>每击杀 3 个敌人，每次<b>多射一发</b>${PJ()}（最多 +${4*(v+1)}，进下一间清零）`, ap:p=>p.crown+=1},
  {id:'minion',tag:'弹道',max:2,nm:'战魂',    ds:`召唤一个<b>自动攻击的战魂</b>，会自己找最近的敌人打`, ap:p=>p.minionN+=1},
  // ===== 组合卡（哈迪斯 Duo 式，需要前置）=====
  {id:'duo1', tag:'组合',max:1,nm:'炽烈风暴', ds:`<i>闪电会点燃</i>：连锁闪电命中的目标直接叠 2 层燃烧，且闪电伤害 +50%`, ap:p=>{p.duoStorm=1;p.chainN+=1}, req:['burn','chain']},
  {id:'duo2', tag:'组合',max:1,nm:'绝对零度', ds:`<i>冻结的敌人被击碎时爆炸</i>，对周围造成 250% 攻击力伤害`, ap:p=>p.duoZero=1, req:['chill','vschill']},
- {id:'duo3', tag:'组合',max:1,nm:'血债血偿', ds:`击杀<i>流血中</i>的敌人回复 <i>6%</i> 生命，且流血伤害翻倍`, ap:p=>{p.bleedExec=.06;p.bleedOn+=2}, req:['bleed','blood']},
+ {id:'duo3', tag:'组合',max:1,nm:'血债血偿', ds:`击杀<i>流血中</i>的敌人回复 <i>6%</i> 生命，且流血伤害翻倍`, ap:p=>{p.bleedExec=.06;p.bleedOn+=2;p.bleedMul=2}, req:['bleed','blood']},
 
 
  // ===== 传奇（哈迪斯式，只在通关 Boss 后必定出现一张）=====
@@ -945,7 +954,7 @@ const CARDS=[
  {id:'L2', tag:'传奇',max:1,nm:'永冬',     ds:`冰霜<b>叠满 3 层</b>即冻结（原本 6 层），冻结时间翻倍`, ap:p=>{p.chillOn=1;p.freezeFast=1}},
  {id:'L3', tag:'传奇',max:1,nm:'无双连斩', ds:`平A 连招<b>直接解锁到 5 段</b>，且全段伤害 +30%`, ap:p=>{p.comboMax=5;p.basicMul+=.30}},
  {id:'L4', tag:'传奇',max:1,nm:'不灭之躯', ds:`生命上限 <i>+120</i>，受到的伤害 <i>-25%</i>，并立即回满生命`, ap:p=>{p.maxHp+=120;p.dr+=.25;p.hp=p.maxHp}},
- {id:'L5', tag:'传奇',max:1,nm:'死神收割', ds:`对生命低于 <i>50%</i> 的敌人伤害 <b>翻倍</b>，击杀时爆炸范围加倍`, ap:p=>{p.exec+=1.0;p.killBoom+=2.4}},
+ {id:'L5', tag:'传奇',max:1,nm:'死神收割', ds:`对生命低于 <i>50%</i> 的敌人伤害 <b>翻倍</b>，击杀时爆炸范围加倍`, ap:p=>{p.exec+=1.0;p.execThreshold=.50;p.killBoom+=2.4;p.killBoomRadius=2}},
  // ===== 新诅咒 =====
  {id:'c3', tag:'诅咒',max:1,nm:'献祭',   ds:`<b>立刻失去 40% 当前生命</b>，永久获得伤害 <i>+50%</i>`, ap:p=>{p.hp=Math.max(1,Math.round(p.hp*.6));p.atkMul+=.50}},
  {id:'c4', tag:'诅咒',max:1,nm:'急躁',   ds:`平A 攻速 <i>+45%</i>，但攻击范围 <i>-28%</i>`, ap:p=>{p.aspd+=.45;p.range-=.28}},
@@ -981,14 +990,14 @@ function newPlayer(cls){
     critRate:.06, critDmg:1.6,
     moveMul:1, dr:0, taken:1,
     cdr:0, lifesteal:0, follow:0, brk:0, brkMax:0, qi:0,
-    dance:0, ramp:0, comboMax:3, bolt:0, boom:0, shadow:0, exec:0,
+    dance:0, ramp:0, comboMax:3, bolt:0, boom:0, shadow:0, exec:0, execThreshold:.35,
     roomHeal:0, orbRate:0, orbBonus:0, noRoomHeal:0, thorns:0,
     // 元素
     burnOn:0, chillOn:0, bleedOn:0, poisonOn:0, doomOn:0, doomPow:0, chainN:0,
-    vsBurn:0, vsChill:0, vsBleed:0, duoStorm:0, duoZero:0, bleedExec:0,
+    vsBurn:0, vsChill:0, vsBleed:0, duoStorm:0, duoZero:0, bleedExec:0, bleedMul:1,
     // 触发
     killHaste:0, killLv:0, killT:0, fullHp:0, lowHp:0, venge:0, vengeT:0,
-    momentum:0, airDmg:0, killBoom:0, streakHeal:0, streak:0,
+    momentum:0, airDmg:0, killBoom:0, killBoomRadius:1, streakHeal:0, streak:0,
     // 弹道
     projN:0, bounce:0, homing:0, projBig:0, pierceUp:0,
     // 防御
@@ -1243,8 +1252,8 @@ function comboStep(){ return COMBO[Math.min(P.combo, P.comboMax-1)]; }
 
 function startCombo(){
   const s=comboStep();
-  const sp=1/P.aspd*(1/(1+P.danceLv*.06));
-  P.act={kind:'combo', step:P.combo, t:0, dur:s.dur*sp,
+  const sp=1/P.aspd*(1/(1+P.danceLv*.06*P.dance));
+  P.act={kind:'combo', step:P.combo, momentum:!!P.run, t:0, dur:s.dur*sp,
     hits:[{at:s.at*sp, ox:s.ox||0, hw:(s.hw||0)*(1+P.range), hd:(s.hd||0)*(1+P.range),
            zt:s.zt, mul:s.mul, kb:s.kb, up:s.up, hs:s.hs, st:s.st, fx:s.fx,
            shot:s.shot, basic:true, qi:s.qi,
@@ -1257,11 +1266,13 @@ function startCombo(){
 
 function castSkill(i){
   if(P.cds[i]>0 || P.act || P.z>.5 || P.vz>0) return;   // 技能需落地释放
-  const up=P.sk[i];
+  const up=P.sk[i], fromRun=!!P.run, projStart=projs.length;
   P.cds[i]=SKILLS[i].cd*(1-Math.min(P.cdr,.6));
   if(P.plan>0) P.planT=3.0;
-  if(P.cls==='gun') return castGun(i,up);
-  castSword(i,up);
+  if(P.cls==='gun') castGun(i,up); else castSword(i,up);
+  // 出招会立刻取消奔跑，所以把「从奔跑中起手」记在这次攻击上。
+  if(P.act) P.act.momentum=fromRun;
+  for(let n=projStart;n<projs.length;n++) projs[n].momentum=fromRun;
 }
 
 /* ---------------- 神枪手 ---------------- */
@@ -1370,6 +1381,7 @@ function doDash(){
    ========================================================================= */
 function hurtEnemy(e, mul, o){
   o=o||{};
+  P.noHitT=0;                              // 打人也属于战斗，不许边输出边触发脱战回血
   let dmg = P.baseAtk * P.atkMul * mul;
   if(o.basic){
     dmg *= P.basicMul;
@@ -1380,7 +1392,7 @@ function hurtEnemy(e, mul, o){
     }
   }
   if(P.dashBuf>0) dmg *= 1+P.shadow;
-  if(P.exec && e.hp/e.maxHp < .35) dmg *= 1+P.exec;
+  if(P.exec && e.hp/e.maxHp < P.execThreshold) dmg *= 1+P.exec;
   dmg *= 1 + e.brkN*P.brk;
   // ——— 吃状态的增伤（死亡细胞式）———
   if(P.vsBurn  && e.burnN>0)  dmg *= 1+P.vsBurn;
@@ -1391,7 +1403,7 @@ function hurtEnemy(e, mul, o){
   if(P.fullHp && P.hp>=P.maxHp) dmg *= 1+P.fullHp;
   if(P.lowHp && P.hp<=P.maxHp*.35) dmg *= 1+P.lowHp;
   if(P.vengeT>0) dmg *= 1+P.venge;
-  if(P.momentum && P.run) { dmg *= 1+P.momentum; }
+  if(P.momentum && (o.momentum || P.run)) dmg *= 1+P.momentum;
   if(P.airDmg && P.z>4) dmg *= 1+P.airDmg;
   if(P.killLv>0) dmg *= 1+P.killLv*.04;
   if(P.orbRageT>0) dmg *= 1+P.orbRage;                        // 腐化
@@ -1512,7 +1524,8 @@ function hurtEnemy(e, mul, o){
   // 破甲叠层
   if(o.basic && P.brk>0){ e.brkN=Math.min(e.brkN+1, 4+P.brkMax); e.brkT=4; }
   // 吸血
-  if(P.lifesteal>0 && !o.noSteal){ P.hp=Math.min(P.maxHp, P.hp + dmg*P.lifesteal); }
+  if(o.basic && P.lifesteal>0 && !o.noSteal)
+    P.hp=Math.min(P.maxHp, P.hp + dmg*P.lifesteal);
   // 剑舞
   if(o.basic && P.dance>0){
     P.danceHit++; P.lastHitT=now();
@@ -1546,6 +1559,14 @@ function hurtEnemy(e, mul, o){
   e.vx += dir*(o.kb||0)*kbMul*(e.type==='boss'?.12:1);
   if(o.up) e.vz += o.up*kbMul*(e.type==='boss'?.15:1);
 
+  // 追命 / 二次击发放在统一命中链里，近战和弹丸都能生效。
+  if(o.basic && !o.noFollow && P.follow>0 && Math.random()<P.follow){
+    hurtEnemy(e, mul*.6, {...o, basic:true, noFollow:true,
+      kb:(o.kb||0)*.3, st:(o.st!=null?o.st:.2)*.6, quiet:true});
+    fxs.push({k:'slash',x:e.x,y:e.y,z:e.z+30,t:0,dur:.16,
+      f:o.dir!=null?o.dir:P.facing,r:34,c:'#9fe8ff'});
+  }
+
   particles(e.x, e.y, e.z+e.h*.6, crit?12:6, crit?'#ffd34d':'#ffffff');
   return dmg;
 }
@@ -1578,11 +1599,12 @@ function killEnemy(e){
   P.streak=(P.streak||0)+1;
   if(P.streakHeal>0 && P.streak%5===0) healPlayer(P.maxHp*P.streakHeal);
   if(P.killBoom>0){
-    fxs.push({k:'boom',x:e.x,y:e.y,z:e.z+20,t:0,dur:.32,r:88});
+    const boomR=88*P.killBoomRadius;
+    fxs.push({k:'boom',x:e.x,y:e.y,z:e.z+20,t:0,dur:.32,r:boomR});
     SND.boom();
     for(const o of enemies){
       if(o===e||o.dead) continue;
-      if(Math.hypot(o.x-e.x,(o.y-e.y)*1.6)<88){
+      if(Math.hypot(o.x-e.x,(o.y-e.y)*1.6)<boomR){
         const d=Math.round(P.baseAtk*P.atkMul*P.killBoom);
         o.hp-=d; o.flashT=.1;
         nums.push({x:o.x,y:o.y,z:o.z+o.h*.6,v:d,t:0,c:'#ffb066'});
@@ -1629,13 +1651,14 @@ function wardCap(){ return Math.max(P.wardMax, P.killWard>0?1:0); }
 
 function hurtPlayer(dmg, sx){
   if(P.inv>0) return;
+  P.noHitT=0;                         // 护盾挡住了伤害，但仍然身处战斗中
   if(P.ward>0){                       // 护盾：完全抵挡一次
     P.ward--; P.inv=.55; P.flashT=.18;
     fxs.push({k:'poise',x:P.x,y:P.y,z:P.z+34,t:0,dur:.4});
     SND.block(); return;
   }
   P.vengeT = P.venge>0 ? 2.0 : 0;
-  P.streak=0; P.noHitT=0;
+  P.streak=0;
   dmg = Math.max(1, Math.round(dmg * (1-Math.min(P.dr,.75)) * P.taken));
   P.hp-=dmg; P.inv=.62; P.flashT=.2; P.run=null;
   SND.hurt();
@@ -1688,20 +1711,24 @@ function particles(x,y,z,n,c){
    ========================================================================= */
 /* 生成玩家弹丸：所有「弹道」卡都在这里生效 */
 function spawnProj(o){
-  const n=(o.n||1)+P.projN+Math.floor((P.crownN||0)/3)*P.crown;
+  const baseN=o.n||1;
+  const crownBonus=Math.min(P.crown*4, Math.floor((P.crownN||0)/3)*P.crown);
+  const n=baseN+P.projN+crownBonus;
   const spread=o.spread||(P.projN?24:0);
   for(let k=0;k<n;k++){
-    const extra = k>=(o.n||1);                 // 散射多出来的那几发伤害打折
+    const extra = k>=baseN;                    // 散射 / 皇冠多出来的弹丸伤害打折
     const off=(n>1)?(k-(n-1)/2)*spread:0;
     projs.push({own:'p', k:o.k||'bullet',
       x:o.x, y:o.y+off, z:o.z,
       vx:o.vx, vy:0,
-      mul:o.mul*(extra?.70:1)*(1+P.projBig*.22),
-      basic:o.basic, kb:o.kb||60, up:o.up||0, st:o.st, hs:o.hs,
+      mul:o.mul*(extra?.40:1)*(1+P.projBig*.22),
+      basic:o.basic, step:o.step, momentum:o.momentum,
+      kb:o.kb||60, up:o.up||0, st:o.st, hs:o.hs,
       pierceN:(o.pierce||0)+P.pierceUp*3,
       pierceDmg:P.pierceUp?.12:0, hits:0,
       bounce:P.bounce, homing:P.homing,
-      life:o.life||1.1, big:o.big||P.projBig>0, size:1+P.projBig*.7,
+      life:o.life||1.1, big:o.big||P.projBig>0,
+      size:Math.max(.55,1+P.projBig*.7+P.range),
       col:o.col||'#ffd479', qi:o.qi, hitSet:new Set()});
   }
 }
@@ -1709,7 +1736,8 @@ function fireShot(h){
   const s=h.shot, heavy=h.mul>=1.4;
   spawnProj({n:s.n||1, spread:s.spread||0,
     x:P.x+P.facing*34, y:P.y, z:s.z!=null?s.z:30, vx:P.facing*s.spd,
-    mul:h.mul, basic:h.basic, kb:h.kb||60, up:h.up||0, st:h.st, hs:h.hs,
+    mul:h.mul, basic:h.basic, step:P.act?P.act.step:0, momentum:P.act&&P.act.momentum,
+    kb:h.kb||60, up:h.up||0, st:h.st, hs:h.hs,
     pierce:s.pierce||0, life:s.life||1.1, big:s.big, col:s.col, qi:h.qi});
   SND.shot(heavy);
   fxs.push({k:'muzzle', x:P.x+P.facing*38, y:P.y, z:s.z!=null?s.z:30,
@@ -1718,8 +1746,19 @@ function fireShot(h){
   cam.shake=Math.max(cam.shake, heavy?7:2.5);
 }
 
+function fireQi(h){
+  spawnProj({k:'qi', n:P.qi===1?1:3, spread:30,
+    x:P.x+P.facing*40, y:P.y, z:26, vx:P.facing*640,
+    mul:h.mul*.55, basic:false, momentum:P.act&&P.act.momentum,
+    kb:70, pierce:9, life:1.0, col:'#9fe8ff'});
+}
+
 function applyHit(h){
-  if(h.shot){ fireShot(h); return; }
+  if(h.shot){
+    fireShot(h);
+    if(h.qi && P.qi>0) fireQi(h);              // 神枪手的穿甲弹链不再被提前 return 吞掉
+    return;
+  }
   const cx = h.aoe ? P.x : P.x + P.facing*h.ox;
   const cy = P.y;
   let any=false;
@@ -1730,14 +1769,9 @@ function applyHit(h){
     if(e.z > h.zt) continue;
     if(!h.aoe && Math.sign(e.x-P.x)!==P.facing && Math.abs(e.x-P.x)>10) continue;
     hurtEnemy(e, h.mul, {basic:h.basic, kb:h.kb, up:h.up, aoe:h.aoe, st:h.st,
-                         quiet:h.quiet, step:P.act?P.act.step:0});
+                         quiet:h.quiet, step:P.act?P.act.step:0,
+                         momentum:P.act&&P.act.momentum});
     any=true;
-    // 追命：立刻追加一次
-    if(h.basic && P.follow>0 && Math.random()<P.follow){
-      hurtEnemy(e, h.mul*.6, {basic:true, kb:h.kb*.3, aoe:h.aoe, st:(h.st||.2)*.6,
-                              step:P.act?P.act.step:0});
-      fxs.push({k:'slash', x:e.x, y:e.y, z:e.z+30, t:0, dur:.16, f:P.facing, r:34, c:'#9fe8ff'});
-    }
   }
   if(any){
     hitstop=Math.max(hitstop, h.hs||.04);
@@ -1750,7 +1784,8 @@ function applyHit(h){
     flash=Math.max(flash,.35); SND.quake();
     if(h.shock){
       for(const d of [-1,1]) projs.push({own:'p', k:'shock', x:P.x, y:P.y, z:8,
-        vx:d*520, vy:0, mul:1.6, life:.85, pierce:true, hitSet:new Set()});
+        vx:d*520, vy:0, mul:1.6, momentum:P.act&&P.act.momentum,
+        life:.85, pierce:true, hitSet:new Set()});
     }
   } else if(fx==='burst'){
     /* 照 DNF 原版的画面：地面浮现一圈猩红血气圆环，数道粗壮赤红血柱
@@ -1771,11 +1806,7 @@ function applyHit(h){
       big: fx==='fin'||fx==='sl3'});
   }
   // 剑气纵横
-  if(h.qi && P.qi>0){
-    spawnProj({k:'qi', n:P.qi===1?1:3, spread:30,
-      x:P.x+P.facing*40, y:P.y, z:26, vx:P.facing*640,
-      mul:h.mul*.55, basic:false, kb:70, pierce:9, life:1.0, col:'#9fe8ff'});
-  }
+  if(h.qi && P.qi>0) fireQi(h);
 }
 
 /* =========================================================================
@@ -1898,7 +1929,8 @@ function updPlayer(dt){
       a.spawn.done=true;
       spawnProj({k:'wave', n:a.spawn.n, spread:34,
         x:P.x+P.facing*44, y:P.y, z:28, vx:P.facing*720,
-        mul:2.2, basic:false, kb:70, st:.30, pierce:9, life:1.3, col:'#8fd0ff'});
+        mul:2.2, basic:false, momentum:a.momentum,
+        kb:70, st:.30, pierce:9, life:1.3, col:'#8fd0ff'});
       fxs.push({k:'slash',x:P.x+P.facing*40,y:P.y,z:28,t:0,dur:.2,f:P.facing,r:46,c:'#8fd0ff',big:true});
       SND.wave();
     }
@@ -2026,7 +2058,7 @@ function updEnemy(e,dt){
   if(e.bleedT>0){                                   // 流血：只在移动时掉血
     e.bleedT-=dt;
     const moved=Math.abs(e.x-e.lastX);
-    if(moved>0.4) dot(e, e.bleedN*moved*1.15, '#ff4a6a');
+    if(moved>0.4) dot(e, e.bleedN*moved*1.15*P.bleedMul, '#ff4a6a');
     if(e.bleedT<=0) e.bleedN=0;
   }
   e.lastX=e.x;
@@ -2042,7 +2074,10 @@ function updEnemy(e,dt){
       SND.doom();
     }
   }
-  if(e.affix==='regen') e.hp=Math.min(e.maxHp, e.hp+e.maxHp*.015*dt);
+  if(e.affix==='regen'){
+    const regenRate=e.type==='boss'?.005:.015;
+    e.hp=Math.min(e.maxHp, e.hp+e.maxHp*regenRate*dt);
+  }
   if(e.mirror) mirrorPassive(e,dt);          // 虚影的再生 / 剑舞领域
 
   // 物理
@@ -2618,7 +2653,7 @@ function updProjs(dt){
         for(const e of enemies){
           if(e.dead||e.spawnT>0) continue;
           if(Math.hypot(e.x-p.x,(e.y-p.y)*1.6) < p.aoeR+e.hw)
-            hurtEnemy(e,p.mul,{kb:p.kb,up:p.up,st:p.st,aoe:true});
+            hurtEnemy(e,p.mul,{kb:p.kb,up:p.up,st:p.st,aoe:true,momentum:p.momentum});
         }
         hitstop=Math.max(hitstop,p.hs||.04);
       }
@@ -2660,6 +2695,8 @@ function updProjs(dt){
           p.hitSet.add(e);
           hurtEnemy(e, p.mul, {
             basic:p.basic,
+            step:p.step,
+            momentum:p.momentum,
             kb:p.kb!=null?p.kb:(p.k==='shock'?200:70),
             up: p.up!=null?p.up:(p.k==='shock'?120:0),
             st: p.st!=null?p.st:(p.k==='shock'?.45:.26),
@@ -3396,7 +3433,7 @@ function syncHUD(){
   $('hpghost').style.transform=`scaleX(${ghostHp})`;
   if(ghostHp>r) ghostHp += (r-ghostHp)*.08;
   $('hptxt').textContent=`${Math.ceil(P.hp)} / ${P.maxHp}`;
-  // 虚影关不是「第 11 层」，显示成 10/10 第 1 间会很怪，直接写「终」
+  // 虚影关不属于普通楼层，单独显示为「终」。
   $('fN').textContent = mirrorRoom ? '终' : (floorN+' / '+FLOORS);
   $('rN').textContent = mirrorRoom ? '—' : roomN;
   $('kN').textContent=kills;
@@ -3523,7 +3560,7 @@ function showPause(){
     ['平A 单次伤害',`${(P.baseAtk*P.atkMul*P.basicMul).toFixed(1)}`,        P.basicMul>1||P.atkMul>1],
     ['暴击率',      `${Math.round(P.critRate*100)}%`,                       P.critRate>.06],
     ['暴击伤害',    `${Math.round(P.critDmg*100)}%`,                        P.critDmg>1.6],
-    ['平A 攻速',    `${Math.round((P.aspd+P.danceLv*.06)*100)}%`,           P.aspd>1||P.danceLv>0],
+    ['平A 攻速',    `${Math.round(P.aspd*(1+P.danceLv*.06*P.dance)*100)}%`, P.aspd>1||P.danceLv>0],
     ['攻击范围',    `${Math.round((1+P.range)*100)}%`,                      P.range>0],
     ['移动速度',    `${Math.round(P.moveBase*P.moveMul)}`,                  P.moveMul>1],
     ['受伤减免',    `${Math.round(P.dr*100)}%`,                             P.dr>0],
@@ -3773,7 +3810,7 @@ function syncTitle(){
     }
   }
   const b=SAVE.best[ngPick];
-  $('recLine').innerHTML = !b ? (max>1?'本周目还没有记录':'还没有记录 —— 打通 10 层试试')
+  $('recLine').innerHTML = !b ? (max>1?'本周目还没有记录':`还没有记录 —— 打通 ${FLOORS} 层试试`)
     : b.cleared
       ? `最佳通关 <b>${fmtTime(b.time)}</b> · 最多击杀 <b>${b.kills}</b>`
       : `最深 <b>${b.floor}-${b.room}</b> · 最多击杀 <b>${b.kills}</b> —— 还没通关`;

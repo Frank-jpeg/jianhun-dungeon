@@ -83,6 +83,7 @@ const sandbox = {
 };
 sandbox.window = sandbox;
 sandbox.globalThis = sandbox;
+sandbox.__html = html;
 
 // 把测试代码追加到同一作用域
 const harness = `
@@ -274,6 +275,86 @@ globalThis.__takeAll = function(){
     bad.push('字段 P.' + k + ' = ' + P[k]);
   return bad;
 };
+globalThis.__balance = function(){
+  const bad = [];
+  const card = id => CARDS.find(c => c.id === id);
+
+  // ---- 平A 卡必须对两个职业都有实际效果 ----
+  startGame('gun');
+  P.critRate = 0; P.qi = 1; P.range = .35;
+  const h = {...COMBO_GUN[2], basic:true};
+  P.act = {step:2, momentum:false};
+  applyHit(h);
+  if (projs.length !== 2) bad.push('神枪手重击弹没有触发穿甲弹链');
+  if (!(projs[0].size > 1)) bad.push('弹幕扩散没有放大子弹判定');
+
+  // 弹丸必须携带连招段数和奔跑起手，否则势如破竹 / 势能无效。
+  projs.length = 0; P.act = {step:2, momentum:true};
+  fireShot({...COMBO_GUN[2], basic:true});
+  if (projs.some(p => p.step !== 2 || !p.momentum))
+    bad.push('子弹丢失了连招段数或奔跑起手状态');
+
+  // 二次击发要从弹丸命中走统一伤害链，不能只对近战生效。
+  P.follow = 1; P.critRate = 0;
+  const target=makeEnemy('goblin',400,440), hp0=target.hp;
+  enemies=[target];
+  hurtEnemy(target,1,{basic:true,step:2,kb:0,st:0,noChain:true});
+  if (hp0-target.hp <= P.baseAtk) bad.push('神枪手的二次击发仍未产生追加伤害');
+
+  // 嗜血弹只吸平A，不允许技能 / 随从多段伤害把血条瞬间拉满。
+  P.follow=0; P.lifesteal=.2; P.hp=20;
+  const hp1=P.hp;
+  hurtEnemy(target,1,{basic:false,kb:0,st:0,noChain:true});
+  if (P.hp !== hp1) bad.push('非平A伤害仍在触发吸血');
+  hurtEnemy(target,1,{basic:true,kb:0,st:0,noChain:true});
+  if (P.hp <= hp1) bad.push('平A伤害没有触发吸血');
+
+  // 弹幕皇冠必须有上限，避免围攻房后半程一刀生成几十发弹丸。
+  projs.length=0; P.crown=2; P.crownN=999; P.projN=0;
+  spawnProj({x:P.x,y:P.y,z:30,vx:900,mul:1,basic:true});
+  if (projs.length !== 9) bad.push('弹幕皇冠的二级 +8 弹丸上限未生效：' + projs.length);
+
+  // ---- 可叠卡不许第二张无效 ----
+  startGame('sword');
+  card('dance').ap(P); card('dance').ap(P); P.danceLv = 1;
+  const sp = 1/P.aspd*(1/(1+P.danceLv*.06*P.dance));
+  if (Math.abs(sp - 1/1.12) > 1e-9) bad.push('剑舞第二张仍然没有效果');
+  if (card('plan').max !== 1) bad.push('谋划仍可抽到无效的第二张');
+
+  // ---- 传奇 / 组合卡的卡面必须与代码对齐 ----
+  card('L5').ap(P);
+  if (P.execThreshold !== .5 || P.killBoomRadius !== 2)
+    bad.push('死神收割的 50% 斩杀线或双倍爆炸范围未生效');
+  card('duo3').ap(P);
+  if (P.bleedMul !== 2) bad.push('血债血偿没有让流血伤害翻倍');
+
+  // ---- 后期不设无解的裸装一击必杀 / 过高回血门槛 ----
+  floorN=FLOORS; roomN=ROOMS; ngLevel=1;
+  const bossHit=ET.boss.atk*scaleAtk();
+  if (bossHit >= CLASSES.gun.hp) bad.push('第 5 层 Boss 普通攻击仍会秒杀裸装神枪手');
+  const bossHp=ET.boss.hp*scaleHp();
+  if (bossHp*.005 >= 60) bad.push('再生 Boss 的每秒回复仍是过高 DPS 门槛');
+
+  // 神枪手解锁第 4 段不再让对单 DPS 爆炸。
+  const dps = combo => {
+    const dmg=combo.reduce((n,s)=>n+s.mul*(s.shot&&s.shot.n?s.shot.n:1),0);
+    return dmg/combo.reduce((n,s)=>n+s.dur,0);
+  };
+  const sword4=dps(COMBO_SWORD.slice(0,4)), gun4=dps(COMBO_GUN.slice(0,4));
+  if (gun4/sword4 > 1.15 || gun4/sword4 < .85)
+    bad.push('四段平A对单 DPS 职业差距过大：' + (gun4/sword4).toFixed(2));
+  return bad;
+};
+globalThis.__uiCopy = function(){
+  const bad = [];
+  const swordCard = __html.match(/<div class="ccard" data-cls="sword">([\\s\\S]*?)<div class="ccard g"/);
+  const shownHp = swordCard && swordCard[1].match(/生命 <b>(\\d+)<\\/b>/);
+  if (!shownHp || Number(shownHp[1]) !== CLASSES.sword.hp)
+    bad.push('鬼剑士选人页生命与实际值不一致');
+  if (!__html.includes('\`还没有记录 —— 打通 \${FLOORS} 层试试\`'))
+    bad.push('标题页通关提示没有跟随 FLOORS');
+  return bad;
+};
 `;
 
 const ctxObj = vm.createContext(sandbox);
@@ -324,5 +405,19 @@ try {
                          : '✅ 84 张卡全部可正常应用，无 NaN 字段');
   if (bad.length) fail++;
 } catch (e) { console.log('❌ 卡片测试报错：' + e.message); fail++; }
+
+try {
+  const bad = sandbox.__balance();
+  console.log(bad.length ? '❌ 平衡回归：\n   ' + bad.join('\n   ')
+                         : '✅ 平衡回归正常：职业平A卡生效、卡面与代码对齐、后期 Boss 无硬性数值墙');
+  if (bad.length) fail++;
+} catch (e) { console.log('❌ 平衡回归测试报错：' + e.message); fail++; }
+
+try {
+  const bad = sandbox.__uiCopy();
+  console.log(bad.length ? '❌ 界面文案：\n   ' + bad.join('\n   ')
+                         : '✅ 界面文案正常：职业属性与楼层提示跟随实际配置');
+  if (bad.length) fail++;
+} catch (e) { console.log('❌ 界面文案测试报错：' + e.message); fail++; }
 
 process.exit(fail ? 1 : 0);

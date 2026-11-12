@@ -1,0 +1,3 @@
+# 微应用打包产物，随时可以重新生成
+mapp/dist/
+node_modules/

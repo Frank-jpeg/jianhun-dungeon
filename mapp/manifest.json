@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "id": "00000000-0000-7000-8000-000000000000",
+  "name": "剑魂地下城",
+  "version": "1.0.0",
+  "entry": "index.html",
+  "script": "app.js",
+  "style": "app.css",
+  "permissions": ["audio.webAudio", "storage.read", "storage.write", "fullscreen"],
+  "tags": ["游戏", "肉鸽", "动作"]
+}

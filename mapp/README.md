@@ -30,7 +30,8 @@ MINI_APP_VERSION=1.0.1 node mapp/build-mapp.mjs
 
 ## 应用 ID
 
-`mapp/manifest.json` 里的 `id` 现在还是占位符。第一次上架要：
+`mapp/manifest.json` 里的 `id` 已经是正式分配的值（`01a1d233-9df9-7b8c-a797-ceb6c82d3465`），
+换应用才需要改：
 
 1. linux.do → 个人资料 → **微应用** → 创建应用（填名称、简介、图标）
 2. 复制分配到的应用 ID，原样填进 `manifest.json` 的 `id`
@@ -53,7 +54,7 @@ ID 不能自己编。
 | --- | --- |
 | `index.html` | `<body>` 内容，剥掉 `<script>` |
 | `app.css` | `<style>` 块 |
-| `app.js` | `<script>` 块 |
+| `app.js` | `<script>` 块，外面再包一层 IIFE（平台的 loader 会往末尾追加一段 SDK 校验代码，包一层避免和顶层声明打架） |
 | `strings.json` | 本目录的 `strings.json`（游戏没做 i18n，留空） |
 | `manifest.json` | 本目录 |
 
@@ -81,3 +82,37 @@ ID 不能自己编。
 - 全屏：走 `miniApp.fullscreen.request()`
 - 首屏画完调 `miniApp.lifecycle.ready()`，不调平台会一直等
 - `AudioContext` 创建失败（没获批或没拿到手势）就永久静音，不阻塞开局
+
+## 沙箱里的 CSP（踩过的坑）
+
+应用不是直接跑在帖子页面里，宿主会建一个 `allow-scripts`（不透明源）的 iframe，
+先把一份 `/runtime` 引导页 `document.write` 进去，再把拼好的 HTML 写进内层
+sandbox iframe。那份文档带的 CSP 比想象中严：
+
+```
+default-src 'none'; script-src 'sha256-…' 'wasm-unsafe-eval'; style-src 'sha256-…';
+style-src-attr 'none'; connect-src 'none'; img-src blob:; font-src 'none';
+media-src 'none'; frame-src 'none'; require-trusted-types-for 'script';
+trusted-types 'none'
+```
+
+后果（都会让应用「启动失败」，而且平台把异常吞掉，控制台一个字都没有）：
+
+- **`innerHTML` 直接抛** `This document requires 'TrustedHTML' assignment`。
+  `Element.prototype.innerHTML` 是 `configurable:false`，改不了 setter；
+  `DOMParser.parseFromString` 也被同样拦下。所以只能用 `createElement` 建节点。
+  代码里统一走 `setHTML(el, html)`：先照原样写 `innerHTML`（本地双击走这条），
+  被拒绝时用自带的极简解析器 `hxNodes()` 建 DOM。这两个函数在 `index.html` 的 HUD 段开头。
+- **`localStorage` 读一下就抛 `SecurityError`**（不透明源没有 storage）。所有存取都在
+  `try/catch` 里，平台存档走 `miniApp.localStorage`。
+- **`style="..."` 内联样式会被丢掉**（`style-src-attr 'none'`），要用 class。
+- **没有 `allow-fullscreen`**，`requestFullscreen()` 只会在微应用里拿到被拒的 Promise，
+  全屏必须走 `miniApp.fullscreen.request()`。
+
+### 排查手法
+
+平台不会告诉你哪一行炸了，所以调试时把 `app.js` 包一层探针，用
+`(window.top||parent).postMessage({type:'hx-diag',...})` 把 `addEventListener('error')`
+拿到的 message/stack 发到最外层页面，再在页面里 `addEventListener('message')` 收。
+注意应用的 `parent` 是 frame-host，不是帖子页面，必须发 `window.top`。
+

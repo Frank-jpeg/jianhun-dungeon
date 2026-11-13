@@ -85,6 +85,7 @@
   #buffTip.on{display:block}
   #buffTip b{color:#ffd479}
   #buffTip i{color:#8fd0ff;font-style:normal}
+  #buffTip .dimt{color:#8b8095}
   body.touch #dashHint,body.touch #basic,body.touch #skills,body.touch #buffs,
   body.touch #buffTip{display:none}
   #btnPause{position:absolute;left:326px;top:11px;width:42px;height:22px;border-radius:5px;
@@ -238,7 +239,7 @@
       <div class="bar"><i id="hpghost"></i><i id="hpfill"></i><span id="hptxt"></span></div>
     </div>
     <div id="topR">
-      第 <b id="fN">1</b> 层 · 第 <b id="rN">1</b> 间 <b id="kindN"></b> &nbsp; 击杀 <b id="kN">0</b><br>
+      第 <b id="fN">1</b> 层 · 第 <b id="rN">1</b> 间 <b id="kindN"></b> &nbsp; 击杀 <b id="kN">0</b><br/>
       <span id="affixTip" class="none"></span>
     </div>
     <div id="bossWrap">
@@ -341,10 +342,30 @@
    ========================================================================= */
 
 /* ===== linux.do 微应用适配 =====
-   在社区微应用里平台注入 globalThis.miniApp；双击本地 file:// 打开时它是 undefined。
-   下面所有 MAPP 分支都只在那一边生效，单文件版的行为和原来完全一致。 */
-const MAPP=(typeof globalThis!=='undefined' && globalThis.miniApp && globalThis.miniApp.lifecycle)
-  ? globalThis.miniApp : null;
+   平台对象 globalThis.miniApp 有可能比本脚本晚注入，所以不能只在开头判一次，
+   统一走 mapp() 现取现用。双击本地打开时它永远返回 null，行为与原来一致。
+   平台接口一律当"可能不存在 / 可能同步抛"对待，任何一处失败都不许把启动带崩。 */
+function mapp(){
+  try{
+    const m=globalThis.miniApp;
+    if(m && m.lifecycle && typeof m.lifecycle.ready==='function') return m;
+  }catch(e){}
+  return null;
+}
+
+/* 先把"起来了"报给平台，再跑游戏：平台没收到这一下会把整个应用当启动失败拆掉，
+   那样真正的报错就看不到了。后续任何异常都不影响这次上报。 */
+try{ const m0=mapp(); if(m0) m0.lifecycle.ready().catch(()=>{}); }catch(e){}
+
+/* 兜底：真出异常时直接在页面上摊出来，别让它静默失败 */
+addEventListener('error', ev=>{
+  try{
+    const d=document.createElement('div');
+    d.style.cssText='position:fixed;left:0;top:0;right:0;z-index:99999;background:#300;color:#fff;font:12px/1.5 monospace;padding:8px;white-space:pre-wrap';
+    d.textContent='ERR: '+(ev.message||'')+' @'+(ev.lineno||0)+':'+(ev.colno||0);
+    (document.body||document.documentElement).appendChild(d);
+  }catch(e){}
+});
 
 const CW=960, CH=540;
 const FLOOR_TOP=318, FLOOR_BOT=506;   // 可站立的纵深范围
@@ -354,9 +375,9 @@ const ROOM_W=1200;                     // 房间世界宽度（可视 960，所�
    游戏是双击 file:// 打开的，部分浏览器在这个协议下直接禁掉 localStorage 并抛异常。
    所以读写全部 try 兜底：存不了就当没有记录，游戏本身照常能玩。 */
 const SAVE_KEY='jianhun.save.v1';
-let saveReady=!MAPP;                   // 平台存档是异步读的，补齐之前不许写，否则会拿空档覆盖掉真存档
+let saveReady=false;                   // 平台存档读完（或确认没有平台）之前不许写，否则会拿空档覆盖真存档
 function loadSave(){
-  if(MAPP) return {ngMax:1, best:{}};  // 真存档启动后异步补，见文件末尾
+  if(mapp()) return {ngMax:1, best:{}};  // 真存档启动后异步补，见文件末尾
   try{
     const s=JSON.parse(localStorage.getItem(SAVE_KEY));
     if(s && typeof s==='object')
@@ -365,9 +386,13 @@ function loadSave(){
   return {ngMax:1, best:{}};
 }
 function writeSave(){
-  if(!saveReady) return;
   const data=JSON.stringify(SAVE);
-  if(MAPP){ MAPP.localStorage.setItem(SAVE_KEY, data).catch(()=>{}); return; }
+  const m=mapp();
+  if(m){
+    if(!saveReady) return;   // 平台存档还没读回来，别拿空档盖掉
+    try{ m.localStorage.setItem(SAVE_KEY, data).catch(()=>{}); }catch(e){}
+    return;
+  }
   try{ localStorage.setItem(SAVE_KEY, data); }catch(e){}
 }
 const SAVE=loadSave();
@@ -663,7 +688,9 @@ function tStart(e){
        这里是唯一能自动拿到全屏的时机（全屏按钮藏在暂停菜单里没人找得到）。 */
     try{
       const d=document.documentElement;
-      if(!document.fullscreenElement){
+      // 沙箱里没有 allow-fullscreen，直接调会拿到一个被拒的 Promise；
+      // 微应用里全屏只能走平台的 fullscreen.request()，而且必须由玩家点按钮触发
+      if(!mapp() && !document.fullscreenElement){
         if(d.requestFullscreen) d.requestFullscreen();
         else if(d.webkitRequestFullscreen) d.webkitRequestFullscreen();
       }
@@ -3422,23 +3449,64 @@ function render(){
    HUD
    ========================================================================= */
 const $=id=>document.getElementById(id);
+
+/* 微应用宿主给应用文档下发的 CSP 带 require-trusted-types-for 'script'，沙箱里
+   innerHTML、DOMParser.parseFromString 这类 HTML 解析入口会直接抛
+   「This document requires 'TrustedHTML' assignment」，而 trusted-types 白名单
+   里没有我们申请得到的策略名，Element.prototype.innerHTML 又是不可重定义的。
+   所以 setHTML 先照原样写原生（双击本地单文件走的就是这条），被拒绝时改走
+   自己这个极简解析器 —— 它只认标签、class 之类的属性和纯文本，够覆盖本游戏
+   用到的全部片段，产出的 DOM 和 innerHTML 一致。 */
+let htmlNative=null;
+function hxNodes(html){
+  const out=document.createDocumentFragment(), stack=[out];
+  const VOID={br:1,img:1,hr:1};
+  const tag=/<\/?([a-zA-Z][\w-]*)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*\/?>/g;
+  const put=t=>{ if(t) stack[stack.length-1].appendChild(document.createTextNode(
+    t.replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"')
+     .replace(/&#39;/g,"'").replace(/&nbsp;/g,'\u00a0').replace(/&amp;/g,'&'))); };
+  let last=0, m;
+  while((m=tag.exec(html))){
+    put(html.slice(last,m.index));
+    if(m[0][1]==='/'){ if(stack.length>1) stack.pop(); }
+    else{
+      const el=document.createElement(m[1].toLowerCase());
+      const attr=/([\w-]+)(?:="([^"]*)")?/g; let a;
+      while((a=attr.exec(m[2]||''))) if(a[1]) el.setAttribute(a[1],a[2]||'');
+      stack[stack.length-1].appendChild(el);
+      if(!/\/>$/.test(m[0]) && !VOID[m[1].toLowerCase()]) stack.push(el);
+    }
+    last=tag.lastIndex;
+  }
+  put(html.slice(last));
+  return out;
+}
+function setHTML(el, html){
+  if(!el) return el;
+  const s=html==null?'':String(html);
+  if(htmlNative!==false){
+    try{ el.innerHTML=s; htmlNative=true; return el; }
+    catch(e){ htmlNative=false; }
+  }
+  while(el.firstChild) el.removeChild(el.firstChild);
+  if(s) el.appendChild(hxNodes(s));
+  return el;
+}
+
 const skEls=[];
 let dashEl=null;
 function buildSkillBar(){
-  const box=$('skills'); if(!box) return;
-  box.innerHTML=''; skEls.length=0;
+  const box=$('skills'); if(!box) return; setHTML(box, ''); skEls.length=0;
   SKILLS.forEach((s,i)=>{
-    const d=document.createElement('div'); d.className='sk';
-    d.innerHTML=`<div class="ico">${s.nm[0]}</div><div class="cd"></div>
-      <div class="cdn"></div><div class="key">${s.key}</div>`;
+    const d=document.createElement('div'); d.className='sk'; setHTML(d, `<div class="ico">${s.nm[0]}</div><div class="cd"></div>
+      <div class="cdn"></div><div class="key">${s.key}</div>`);
     box.appendChild(d);
     skEls.push({el:d, cd:d.querySelector('.cd'), n:d.querySelector('.cdn')});
   });
   /* 闪避也占一格。它的充能过去是完全不可见的状态：按了没出，玩家只会以为
      「按键没响应」。冷却本身很短（.62s），真正缺的是反馈。 */
-  const d=document.createElement('div'); d.className='sk dash';
-  d.innerHTML=`<div class="ico">闪</div><div class="cd"></div>
-    <div class="cdn"></div><div class="chg"></div><div class="key">空格</div>`;
+  const d=document.createElement('div'); d.className='sk dash'; setHTML(d, `<div class="ico">闪</div><div class="cd"></div>
+    <div class="cdn"></div><div class="chg"></div><div class="key">空格</div>`);
   box.appendChild(d);
   dashEl={el:d, cd:d.querySelector('.cd'), n:d.querySelector('.cdn'),
           chg:d.querySelector('.chg')};
@@ -3467,7 +3535,7 @@ function syncHUD(){
   kn.style.color = mirrorRoom?'#b48aff' : roomKind==='elite'?'#ffd479' : roomKind==='siege'?'#ff9ab4' : '#ffb4a0';
 
   const at=$('affixTip');
-  if(roomAffix){ at.className=''; at.innerHTML=`本间敌人：<b>${roomAffix.nm}</b> · ${roomAffix.ds}`; }
+  if(roomAffix){ at.className=''; setHTML(at, `本间敌人：<b>${roomAffix.nm}</b> · ${roomAffix.ds}`); }
   else at.className='none';
 
   for(let i=0;i<4;i++){
@@ -3502,7 +3570,7 @@ function syncHUD(){
 
 const BUFF_LIM=10;                    // 平时最多露出这么多，其余折进「+N」
 function syncBuffs(){
-  const b=$('buffs'); b.innerHTML='';
+  const b=$('buffs'); setHTML(b, '');
   const order=Object.keys(taken);
   const hid=Math.max(0, order.length-BUFF_LIM);
   if(hid){
@@ -3519,9 +3587,8 @@ function syncBuffs(){
     d.onmouseenter=()=>{
       const lv=taken[id]||0;
       const ds = typeof c.ds==='function' ? c.ds(lv) : c.ds;
-      const t=$('buffTip');
-      t.innerHTML=`<b>${cardName(c)}</b>${lv>1?` ×${lv}`:''}　`
-        +`<span style="color:#8b8095">${c.tag}</span><br>${ds}`;
+      const t=$('buffTip'); setHTML(t, `<b>${cardName(c)}</b>${lv>1?` ×${lv}`:''}　`
+        +`<span class="dimt">${c.tag}</span><br>${ds}`);
       t.classList.add('on');
     };
     d.onmouseleave=()=>$('buffTip').classList.remove('on');
@@ -3560,9 +3627,7 @@ const TIPDOC=[
  ['房型','<b>精英房</b>怪少而强；<b>围攻房</b>不等你清完就放下一波，别贪刀'],
 ];
 
-function showPause(){
-  $('pSkills').innerHTML =
-    `<div class="skRow"><div class="kb">X</div><div class="txt">
+function showPause(){setHTML($('pSkills'), `<div class="skRow"><div class="kb">X</div><div class="txt">
       <em>平A 连招</em><i>当前 ${P.comboMax} 段</i><br>
       ${COMBO.slice(0,P.comboMax).map(c=>c.nm).join(' → ')}。
       <b>全局主要输出</b>，按住 X 自动连击</div></div>` +
@@ -3571,12 +3636,9 @@ function showPause(){
       return `<div class="skRow"><div class="kb">${s.key}</div><div class="txt">
         <em>${s.nm}</em><i>冷却 ${cd} 秒</i>${P.sk[i]?' <b>· 已强化</b>':''}
         <br>${s.ds}</div></div>`;
-    }).join('');
-
-  $('pKeys').innerHTML = KEYDOC.map(([k,d])=>
-    `<div class="skRow"><div class="kb">${k}</div><div class="txt">${d}</div></div>`).join('');
-  $('pTips').innerHTML = TIPDOC.map(([k,d])=>
-    `<div class="skRow"><div class="kb">${k}</div><div class="txt">${d}</div></div>`).join('');
+    }).join('')); setHTML($('pKeys'), KEYDOC.map(([k,d])=>
+    `<div class="skRow"><div class="kb">${k}</div><div class="txt">${d}</div></div>`).join('')); setHTML($('pTips'), TIPDOC.map(([k,d])=>
+    `<div class="skRow"><div class="kb">${k}</div><div class="txt">${d}</div></div>`).join(''));
 
   const rows=[
     ['职业',        CLS.nm,                                                 false],
@@ -3592,16 +3654,14 @@ function showPause(){
     ['跳跃段数',    `${P.jumpMax}`,                                        P.jumpMax>1],
     ['闪避次数',    `${P.dashChg} / ${P.dashMax}`,                         P.dashMax>1],
     ['护盾',        `${P.ward} / ${wardCap()}`,                            P.ward>0],
-  ];
-  $('pStats').innerHTML = rows.map(([n,v,up])=>
-    `<div class="stRow"><span>${n}</span><b class="${up?'up':''}">${v}</b></div>`).join('');
+  ]; setHTML($('pStats'), rows.map(([n,v,up])=>
+    `<div class="stRow"><span>${n}</span><b class="${up?'up':''}">${v}</b></div>`).join(''));
 
-  const ids=Object.keys(taken);
-  $('pCards').innerHTML = ids.length ? ids.map(id=>{
+  const ids=Object.keys(taken); setHTML($('pCards'), ids.length ? ids.map(id=>{
     const c=CARDS.find(x=>x.id===id);
     const cls=c.tag==='平A'?'a':c.tag==='诅咒'?'c':'';
     return `<div class="bf ${cls}">${cardName(c)}${taken[id]>1?' ×'+taken[id]:''}</div>`;
-  }).join('') : '<div class="empty">还没有获得强化</div>';
+  }).join('') : '<div class="empty">还没有获得强化</div>');
 
   $('vol').value=Math.round(SND.getVol()*100);
   const bm=$('btnMute');
@@ -3625,7 +3685,8 @@ $('btnTouch').onclick=()=>{ touchMode=!touchMode; document.body.classList.toggle
   showPause(); };
 $('btnFull').onclick=()=>{
   // 微应用里全屏必须走平台接口（每次进入都要用户确认），不能再直接 requestFullscreen
-  if(MAPP){ MAPP.fullscreen.request().catch(()=>{}); return; }
+  const m=mapp();
+  if(m){ try{ m.fullscreen.request().catch(()=>{}); }catch(e){} return; }
   const d=document.documentElement;
   if(document.fullscreenElement) document.exitFullscreen();
   else if(d.requestFullscreen) d.requestFullscreen();
@@ -3677,16 +3738,15 @@ function showCards(){
           ? `第 ${floorN-1} 层 已通关 —— 进入最终层`
           : `第 ${floorN-1} 层 已通关 —— 进入第 ${floorN} 层`)
       : `第 ${roomN-1} 间 已清空`;
-  const row=$('cardRow'); row.innerHTML='';
+  const row=$('cardRow'); setHTML(row, '');
   pendingCards.forEach((c,i)=>{
     const lv=taken[c.id]||0;
     const d=document.createElement('div');
     d.className='card t'+c.tag;
-    const ds = typeof c.ds==='function' ? c.ds(lv) : c.ds;
-    d.innerHTML=`<div class="tag">${c.tag}</div><div class="nm">${cardName(c)}</div>
+    const ds = typeof c.ds==='function' ? c.ds(lv) : c.ds; setHTML(d, `<div class="tag">${c.tag}</div><div class="nm">${cardName(c)}</div>
       <div class="ds">${ds}</div>
       <div class="lv">${c.max>1?`已获得 ${lv} / ${c.max}`:'唯一'}</div>
-      <div class="kk">按 ${i+1}</div>`;
+      <div class="kk">按 ${i+1}</div>`);
     d.onclick=()=>choose(i);
     row.appendChild(d);
   });
@@ -3736,27 +3796,23 @@ function gameOver(){
      就已经落地了。标题不能写「你倒下了」—— 那看起来像这一局白打了。 */
   if(winInfo){
     $('ovTitle').textContent='已 通 关';
-    $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+'未能战胜自己的虚影';
-    $('ovStats').innerHTML=
-      `通关用时 <b>${fmtTime(winInfo.t)}</b>` +
+    $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+'未能战胜自己的虚影'; setHTML($('ovStats'), `通关用时 <b>${fmtTime(winInfo.t)}</b>` +
         (winInfo.fresh?' <i class="nr">新纪录</i>':'') + `<br>` +
       `<span class="dim">虚影未击败 —— 再来一局试试</span><br>` +
       `击杀敌人 <b>${kills}</b><br>` +
       `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张` +
       (winInfo.unlocked
         ? `<br><br><b class="unlock">已解锁第 ${SAVE.ngMax} 周目</b>`
-        : '');
+        : ''));
     $('mOver').classList.remove('off');
     return;
   }
   $('ovTitle').textContent='你 倒 下 了';
-  $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+`死于第 ${floorN} 层 第 ${roomN} 间`;
-  $('ovStats').innerHTML=
-    `到达深度 <b>${floorN}-${roomN}</b> / 共 ${FLOORS} 层` +
+  $('ovSub').textContent=(ngLevel>1?`第 ${ngLevel} 周目 · `:'')+`死于第 ${floorN} 层 第 ${roomN} 间`; setHTML($('ovStats'), `到达深度 <b>${floorN}-${roomN}</b> / 共 ${FLOORS} 层` +
       (fresh?' <i class="nr">最深纪录</i>':(deep?` <span class="dim">（最深 ${deep}）</span>`:'')) + `<br>` +
     `击杀敌人 <b>${kills}</b><br>` +
     `获得强化 <b>${Object.values(taken).reduce((a,b)=>a+b,0)}</b> 张<br>` +
-    `存活时间 <b>${fmtTime(t)}</b>`;
+    `存活时间 <b>${fmtTime(t)}</b>`);
   $('mOver').classList.remove('off');
 }
 
@@ -3785,9 +3841,7 @@ function gameWin(beatMirror){
   $('ovTitle').textContent = beatMirror ? '真 · 通 关' : '通 关';
   $('ovSub').textContent = (ngLevel>1?`第 ${ngLevel} 周目 · `:'') + (beatMirror
     ? '你战胜了自己的虚影'
-    : `${FLOORS} 层全部打通 —— 巨魔王已倒下`);
-  $('ovStats').innerHTML=
-    `通关用时 <b>${fmtTime(t)}</b>` +
+    : `${FLOORS} 层全部打通 —— 巨魔王已倒下`); setHTML($('ovStats'), `通关用时 <b>${fmtTime(t)}</b>` +
       (fresh?' <i class="nr">新纪录</i>':(prevTime?` <span class="dim">（最佳 ${fmtTime(prevTime)}）</span>`:'')) + `<br>` +
     (beatMirror?`<b class="unlock">虚影已击败</b><br>`:'') +
     `击杀敌人 <b>${kills}</b><br>` +
@@ -3796,7 +3850,7 @@ function gameWin(beatMirror){
     (unlocked
       ? `<br><br><b class="unlock">已解锁第 ${SAVE.ngMax} 周目</b>` +
         `<br><span class="dim">敌人属性 ×${(1+(SAVE.ngMax-1)*.28).toFixed(2)}</span>`
-      : '');
+      : ''));
   $('mOver').classList.remove('off');
 }
 
@@ -3825,8 +3879,7 @@ function syncTitle(){
   ngPick=clamp(ngPick|0, 1, max);
   if(max<=1) row.classList.add('off');
   else {
-    row.classList.remove('off');
-    row.innerHTML='<span>周目</span>';
+    row.classList.remove('off'); setHTML(row, '<span>周目</span>');
     for(let i=1;i<=max;i++){
       const b=document.createElement('div');
       b.className='ngb'+(i===ngPick?' on':'');
@@ -3836,11 +3889,10 @@ function syncTitle(){
       row.appendChild(b);
     }
   }
-  const b=SAVE.best[ngPick];
-  $('recLine').innerHTML = !b ? (max>1?'本周目还没有记录':`还没有记录 —— 打通 ${FLOORS} 层试试`)
+  const b=SAVE.best[ngPick]; setHTML($('recLine'), !b ? (max>1?'本周目还没有记录':`还没有记录 —— 打通 ${FLOORS} 层试试`)
     : b.cleared
       ? `最佳通关 <b>${fmtTime(b.time)}</b> · 最多击杀 <b>${b.kills}</b>`
-      : `最深 <b>${b.floor}-${b.room}</b> · 最多击杀 <b>${b.kills}</b> —— 还没通关`;
+      : `最深 <b>${b.floor}-${b.room}</b> · 最多击杀 <b>${b.kills}</b> —— 还没通关`);
 }
 
 document.querySelectorAll('.ccard').forEach(el=>{
@@ -3896,22 +3948,31 @@ document.body.classList.toggle('touch',touchMode);
 resetRun('sword'); syncBuffs(); gameState='title';
 requestAnimationFrame(frame);
 
-/* 微应用：补读平台存档，读完才放行写入 */
-if(MAPP){
-  MAPP.localStorage.getItem(SAVE_KEY).then(raw=>{
-    if(!raw) return;
-    const s=JSON.parse(raw);
-    if(s && typeof s==='object'){
-      SAVE.ngMax=Math.max(1, s.ngMax|0);
-      SAVE.best=(s.best && typeof s.best==='object')?s.best:{};
-    }
-  }).catch(()=>{}).then(()=>{
-    saveReady=true;
-    if(gameState==='title') syncTitle();   // 存档到了，标题页的记录重画一次
-  });
-  // 首屏已经画完，通知平台可以撤掉加载态
-  MAPP.lifecycle.ready().catch(()=>{});
-}
+/* 微应用：平台对象可能晚于本脚本注入，轮询等它出现后补读存档。
+   ready 已经在上面提前报过了，这里只管存档。最多等 5 秒。 */
+(function attach(n){
+  const m=mapp();
+  if(m){
+    Promise.resolve()
+      .then(()=>m.localStorage.getItem(SAVE_KEY))
+      .then(raw=>{
+        if(!raw) return;
+        const s=JSON.parse(raw);
+        if(s && typeof s==='object'){
+          SAVE.ngMax=Math.max(1, s.ngMax|0);
+          SAVE.best=(s.best && typeof s.best==='object')?s.best:{};
+        }
+      })
+      .catch(()=>{})
+      .then(()=>{
+        saveReady=true;
+        if(gameState==='title') syncTitle();   // 存档到了，标题页的记录重画一次
+      });
+    return;
+  }
+  if(n < 300) setTimeout(()=>attach(n+1), 16);   // 约 5 秒
+  else saveReady=true;                           // 确认没有平台：按本地版放行写入
+})(0);
 </script>
 </body>
 </html>

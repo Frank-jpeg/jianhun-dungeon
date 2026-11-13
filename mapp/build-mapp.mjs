@@ -42,8 +42,12 @@ function slice(re, label) {
 }
 
 const css = slice(/<style>([\s\S]*?)<\/style>/, '<style> 块').trim();
-const script = slice(/<script>([\s\S]*?)<\/script>/, '<script> 块').trim();
+const scriptRaw = slice(/<script>([\s\S]*?)<\/script>/, '<script> 块').trim();
 const body = slice(/<body>([\s\S]*?)<\/body>/, '<body> 块');
+
+// 平台的 loader 认单个 IIFE 的 app.js（文档里的产物形态），单文件版是经典脚本。
+// 包一层不影响任何语义：顶层 const/let 换成函数作用域，addEventListener 之类照旧。
+const script = `(function(){\n${scriptRaw}\n})();`;
 
 // body 里只有一块 <script>，剥掉后剩下的才是平台要的正文片段
 const fragment = body.replace(/<script>[\s\S]*?<\/script>/g, '').trim();
